@@ -1,0 +1,3 @@
+provides: libblock-device
+requires: libstdc++ l4virtio
+maintainer: sarah.hoffmann@kernkonzept.com
