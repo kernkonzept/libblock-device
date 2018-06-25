@@ -148,7 +148,7 @@ class Device_mgr : public L4::Epiface_t<Device_mgr<IF>, L4::Factory>
     {
       l4_size_t sz = reader.table_size();
 
-      for (l4_size_t i = 0; i < sz; ++i)
+      for (l4_size_t i = 1; i <= sz; ++i)
         {
           Partition_info info;
           if (reader.get_partition(i, &info) < 0)

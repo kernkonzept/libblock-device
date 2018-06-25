@@ -70,13 +70,13 @@ int
 Block_device::Partition_reader::get_partition(l4_size_t idx,
                                               Partition_info *inf) const
 {
-  if (idx >= _num_partitions)
+  if (idx == 0 || idx > _num_partitions)
     return -L4_ERANGE;
 
   unsigned secsz = _dev->sector_size();
   auto *header = _header.get<Gpt_header const>(secsz);
 
-  Gpt_entry *e = _parray.get<Gpt_entry>(idx * header->entry_size);
+  Gpt_entry *e = _parray.get<Gpt_entry>((idx - 1) * header->entry_size);
 
   if (*((l4_uint64_t *) &e->partition_guid) == 0ULL)
     return -L4_ENODEV;
@@ -87,16 +87,16 @@ Block_device::Partition_reader::get_partition(l4_size_t idx,
   inf->last = e->last;
   inf->flags = e->flags;
 
-  auto trace = Dbg::trace();
-  if (trace.is_active())
+  auto info = Dbg::info();
+  if (info.is_active())
     {
-      trace.printf("%3zu: %10lld %10lld  %5gMiB [%.37s]\n",
-                   idx, e->first, e->last,
-                   (e->last - e->first + 1.0) * secsz / (1 << 20),
-                   inf->guid);
+      info.printf("%3zu: %10lld %10lld  %5gMiB [%.37s]\n",
+                  idx, e->first, e->last,
+                  (e->last - e->first + 1.0) * secsz / (1 << 20),
+                  inf->guid);
 
       char buf[37];
-      trace.printf("   : Type: %s\n", render_guid(e->type_guid, buf));
+      info.printf("   : Type: %s\n", render_guid(e->type_guid, buf));
     }
 
   return L4_EOK;

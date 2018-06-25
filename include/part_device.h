@@ -29,7 +29,7 @@ public:
 
     if (partition_id > 999)
       L4Re::chksys(-L4_EINVAL,
-                   "Partition ID must be smaller than 999.");
+                   "Partition ID must be smaller than 1000.");
 
     snprintf(_partition_id, sizeof(_partition_id), "%d", partition_id);
 
