@@ -197,54 +197,79 @@ public:
   }
 
   int add_static_client(char const *description)
-    {
-      char const *capname = description;
-      char *sep = strchr(capname, ',');
-      if (!sep)
-        {
-          Dbg::info().printf("Missing disk_id in static cap specification.");
-          return -1;
-        }
-      int capnamelen = sep - capname;
+  {
+    char const *capname = description;
+    char *sep = strchr(capname, ',');
+    if (!sep)
+      {
+        Dbg::info().printf("Missing disk_id in static cap specification.");
+        return -1;
+      }
+    int capnamelen = sep - capname;
 
-      char const *devname = sep + 1;
-      sep = strchr(devname, ',');
-      if (!sep)
-        {
-          Dbg::info().printf("Missing number of dataspaces for static capability.");
-          return -1;
-        }
-      std::string device(devname, sep - devname);
+    char const *devname = sep + 1;
+    sep = strchr(devname, ',');
+    if (!sep)
+      {
+        Dbg::info().printf("Missing number of dataspaces for static capability.");
+        return -1;
+      }
+    std::string device(devname, sep - devname);
 
-      char *endp;
-      long numds = strtol(sep + 1, &endp, 10);
-      if (!*(sep + 1) || *endp)
-        {
-          Err().printf("Cannot parse number of dataspaces in static capability.\n");
-          return -L4_EINVAL;
-        }
+    char *endp;
+    long numds = strtol(sep + 1, &endp, 10);
+    if (!*(sep + 1) || *endp)
+      {
+        Err().printf("Cannot parse number of dataspaces in static capability.\n");
+        return -L4_EINVAL;
+      }
 
-      if (numds <= 0 || numds > 255)
-        {
-          Err().printf("Number of dataspaces out of range in static capability.\n");
-          return -L4_EINVAL;
-        }
+    if (numds <= 0 || numds > 255)
+      {
+        Err().printf("Number of dataspaces out of range in static capability.\n");
+        return -L4_EINVAL;
+      }
 
-      Dbg::trace().printf("Adding static client. cap: %.*s device: %s, numds: %li\n",
-                          capnamelen, capname, device.c_str(), numds);
+    auto cap = L4Re::Env::env()->get_cap<L4::Rcv_endpoint>(capname, capnamelen);
+    if (!cap.is_valid())
+      {
+        Err().printf("Client capability '%.*s' not valid.\n",
+                     capnamelen, capname);
+        return -L4_ENODEV;
+      }
 
-      auto cap = L4Re::Env::env()->get_cap<L4::Rcv_endpoint>(capname, capnamelen);
-      if (!cap.is_valid())
-        {
-          Err().printf("Client capability '%.*s' not valid.\n",
-                       capnamelen, capname);
-          return -L4_ENODEV;
-        }
+    _pending_clients.emplace_back(cap, device, numds);
 
-      _pending_clients.emplace_back(cap, device, numds);
+    return L4_EOK;
+  }
 
-      return L4_EOK;
-    }
+  int add_static_client(L4::Cap<L4::Rcv_endpoint> client, const char *device,
+                        int partno, int num_ds)
+  {
+    char _buf[30];
+    const char *buf;
+
+    if (partno == 0)
+      {
+        Err().printf("Invalid partition number 0.\n");
+        return -L4_ENODEV;
+      }
+
+    if (partno != -1)
+      {
+        /* Could we avoid to make a string here and parsing this again
+         * deeper in the stack? */
+        snprintf(_buf, sizeof(_buf), "%s:%d", device, partno);
+        buf = _buf;
+      }
+    else
+      buf = device;
+
+    _pending_clients.emplace_back(client, buf, num_ds);
+
+    return L4_EOK;
+  }
+
 
   void add_disk(cxx::Ref_ptr<Device> &&device)
   {
