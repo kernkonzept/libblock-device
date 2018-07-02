@@ -32,7 +32,7 @@ namespace Block_device {
  * \tparam IF Class that will handle the client.
  */
 template <typename IF>
-class Device_mgr : public L4::Epiface_t<Device_mgr<IF>, L4::Factory>
+class Device_mgr
 {
   using Client_type = IF;
 
@@ -184,15 +184,13 @@ class Device_mgr : public L4::Epiface_t<Device_mgr<IF>, L4::Factory>
 
 public:
   Device_mgr(L4::Registry_iface *registry)
-  : _registry(registry), _available_devices(0)
+  : _registry(registry)
   {}
 
   virtual ~Device_mgr()
   {
     for (auto *c : _connpts)
       c->unregister_interfaces(_registry);
-
-    _registry->unregister_obj(this);
   }
 
   int add_static_client(char const *description)
@@ -269,48 +267,21 @@ public:
     return L4_EOK;
   }
 
-
-  void add_disk(cxx::Ref_ptr<Device> &&device)
+  int create_dynamic_client(std::string const &device, int partno, int num_ds,
+                            L4::Cap<void> *cap)
   {
-    auto conn = cxx::make_ref_obj<Connection>(std::move(device));
-
-    ++_available_devices;
-
-    conn->start_disk_scan(
-      [=]()
-        {
-          _connpts.push_front(conn);
-          ++_static_clients;
-          connect_static_clients(conn.get());
-        });
-  }
-
-  long op_create(L4::Factory::Rights,
-                 L4::Ipc::Cap<void> &res, l4_mword_t,
-                 L4::Ipc::Varg_list_ref valist)
-  {
-    Dbg::trace().printf("Client requests connection.\n");
-
-    L4::Ipc::Varg param = valist.next();
-
-    if (!param.is_of<l4_mword_t>())
-      return -L4_EINVAL;
-
     Pending_client clt;
 
     // Maximum number of dataspaces that can be registered.
-    clt.num_ds = param.value<l4_mword_t>();
-    if (clt.num_ds <= 0 || clt.num_ds > 256) // sanity check with arbitrary limit
-      return -L4_EINVAL;
+    clt.num_ds = num_ds;
 
-    param = valist.next();
+    clt.device_id = device;
 
-    // Name of device. This must either be the serial number of the disk,
-    // when the entire disk is requested or for partitions their UUID.
-    if (!param.is_of<char const *>())
-      return -L4_EINVAL;
-
-    clt.device_id = std::string(param.value<char const *>(), param.length() - 1);
+    if (partno > 0)
+      {
+        clt.device_id += ':';
+        clt.device_id += std::to_string(partno);
+      }
 
     for (auto *c : _connpts)
       {
@@ -323,11 +294,25 @@ public:
           return ret;
 
         // found the requested device
-        res = L4::Ipc::make_cap(clt.gate, L4_CAP_FPAGE_RWSD);
+        *cap = clt.gate;
         return L4_EOK;
       }
 
-    return (_available_devices > _static_clients) ? -L4_EAGAIN : -L4_ENODEV;
+    return -L4_ENODEV;
+  }
+
+
+  void add_disk(cxx::Ref_ptr<Device> &&device, Errand::Callback const &callback)
+  {
+    auto conn = cxx::make_ref_obj<Connection>(std::move(device));
+
+    conn->start_disk_scan(
+      [=]()
+        {
+          _connpts.push_front(conn);
+          connect_static_clients(conn.get());
+          callback();
+        });
   }
 
 private:
@@ -352,11 +337,6 @@ private:
         if (ret != -L4_ENODEV)
           break;
       }
-
-    if (_available_devices == _static_clients)
-      if (_registry->register_obj(this, "svr") < 0)
-        Dbg::warn()
-          .printf("Capability 'svr' not found. No dynamic clients accepted.\n");
   }
 
 
@@ -366,10 +346,82 @@ private:
   cxx::Ref_ptr_list<Connection> _connpts;
   /// List of clients waiting for a device to appear.
   std::vector<Pending_client> _pending_clients;
-  /// Number of static clients.
-  unsigned _static_clients;
-  /// Number of devices being scanned.
-  l4_size_t _available_devices;
+};
+
+/**
+ * Mixin that provides a factory interface for a device manager.
+ *
+ * \tparam Base class, must inherit from Device_mgr().
+ *
+ * Implements a create function that expects the following parameters:
+ *
+ *   create(L4virtio::Device cap, l4_mword_t num_ds, char const *device)
+ *
+ * where `num_ds` is the maximum number of dataspaces the client may create
+ * and `device` the name of the device. If the client should use an entire
+ * disk, then the name corresponds to the name of the disk. To connect to
+ * a single partition, either the UUID of the partition or a name of the
+ * form <diskid>:<partitionid>  may be used. In the latter case, partitions
+ * are taken in the order found in the partition table with the first
+ * partition starting at 1.
+ */
+template <typename BASE>
+class Device_factory
+: public L4::Epiface_t<Device_factory<BASE>, L4::Factory>
+{
+public:
+  long op_create(L4::Factory::Rights,
+                 L4::Ipc::Cap<void> &res, l4_mword_t,
+                 L4::Ipc::Varg_list_ref valist)
+  {
+    Dbg::trace().printf("Client requests connection.\n");
+
+    L4::Ipc::Varg param = valist.next();
+
+    if (!param.is_of<l4_mword_t>())
+      {
+        Dbg::warn().printf("Expect number of dataspaces in first parameter.\n");
+        return -L4_EINVAL;
+      }
+
+    // Maximum number of dataspaces that can be registered.
+    int num_ds = param.value<l4_mword_t>();
+    if (num_ds <= 0 || num_ds > 256) // sanity check with arbitrary limit
+      {
+        Dbg::warn().printf("Number of dataspaces in first parameter must be between 1 and 256.\n");
+        return -L4_EINVAL;
+      }
+
+    param = valist.next();
+
+    // Name of device.
+    if (!param.is_of<char const *>())
+      {
+        Dbg::warn().printf("Expect device name as second parameter.\n");
+        return -L4_EINVAL;
+      }
+
+    std::string device_id(param.value<char const *>(),
+                          strnlen(param.value<char const *>(), param.length() - 1));
+
+    L4::Cap<void> cap;
+    int ret = mgr()->create_dynamic_client(
+        std::string(param.value<char const *>(), param.length() - 1),
+        -1, num_ds, &cap);
+
+    if (ret >= 0)
+      res = L4::Ipc::make_cap(cap, L4_CAP_FPAGE_RWSD);
+
+    return (ret == -L4_ENODEV && _scan_in_progress) ? -L4_EAGAIN : ret;
+  }
+
+  void scan_finished()
+  { _scan_in_progress = false; }
+
+private:
+  BASE *mgr() { return static_cast<BASE *>(this); }
+
+  bool _scan_in_progress = true;
 };
 
 } // name space
