@@ -15,7 +15,6 @@
 #include <l4/cxx/ref_ptr_list>
 #include <l4/cxx/unique_ptr>
 #include <l4/re/error_helper>
-#include <l4/re/util/object_registry>
 #include <l4/sys/factory>
 #include <l4/sys/cxx/ipc_epiface>
 
@@ -81,7 +80,7 @@ class Device_mgr : public L4::Epiface_t<Device_mgr<IF>, L4::Factory>
           });
     }
 
-    void unregister_interfaces(L4Re::Util::Object_registry *registry) const
+    void unregister_interfaces(L4::Registry_iface *registry) const
     {
       if (_interface)
         registry->unregister_obj(_interface.get());
@@ -91,7 +90,7 @@ class Device_mgr : public L4::Epiface_t<Device_mgr<IF>, L4::Factory>
     }
 
     int create_interface_for(Pending_client *c,
-                             L4Re::Util::Object_registry *registry)
+                             L4::Registry_iface *registry)
     {
       if (_interface)
         return contains_device(c->device_id) ? -L4_EBUSY : -L4_ENODEV;
@@ -184,7 +183,7 @@ class Device_mgr : public L4::Epiface_t<Device_mgr<IF>, L4::Factory>
   };
 
 public:
-  Device_mgr(L4Re::Util::Object_registry *registry)
+  Device_mgr(L4::Registry_iface *registry)
   : _registry(registry), _available_devices(0)
   {}
 
@@ -362,7 +361,7 @@ private:
 
 
   /// Registry new client connections subscribe to.
-  L4Re::Util::Object_registry *_registry;
+  L4::Registry_iface *_registry;
   /// List of devices with their potential clients.
   cxx::Ref_ptr_list<Connection> _connpts;
   /// List of clients waiting for a device to appear.
