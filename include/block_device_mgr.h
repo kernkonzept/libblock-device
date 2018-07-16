@@ -193,53 +193,6 @@ public:
       c->unregister_interfaces(_registry);
   }
 
-  int add_static_client(char const *description)
-  {
-    char const *capname = description;
-    char *sep = strchr(capname, ',');
-    if (!sep)
-      {
-        Dbg::info().printf("Missing disk_id in static cap specification.");
-        return -1;
-      }
-    int capnamelen = sep - capname;
-
-    char const *devname = sep + 1;
-    sep = strchr(devname, ',');
-    if (!sep)
-      {
-        Dbg::info().printf("Missing number of dataspaces for static capability.");
-        return -1;
-      }
-    std::string device(devname, sep - devname);
-
-    char *endp;
-    long numds = strtol(sep + 1, &endp, 10);
-    if (!*(sep + 1) || *endp)
-      {
-        Err().printf("Cannot parse number of dataspaces in static capability.\n");
-        return -L4_EINVAL;
-      }
-
-    if (numds <= 0 || numds > 255)
-      {
-        Err().printf("Number of dataspaces out of range in static capability.\n");
-        return -L4_EINVAL;
-      }
-
-    auto cap = L4Re::Env::env()->get_cap<L4::Rcv_endpoint>(capname, capnamelen);
-    if (!cap.is_valid())
-      {
-        Err().printf("Client capability '%.*s' not valid.\n",
-                     capnamelen, capname);
-        return -L4_ENODEV;
-      }
-
-    _pending_clients.emplace_back(cap, device, numds);
-
-    return L4_EOK;
-  }
-
   int add_static_client(L4::Cap<L4::Rcv_endpoint> client, const char *device,
                         int partno, int num_ds)
   {
@@ -346,82 +299,6 @@ private:
   cxx::Ref_ptr_list<Connection> _connpts;
   /// List of clients waiting for a device to appear.
   std::vector<Pending_client> _pending_clients;
-};
-
-/**
- * Mixin that provides a factory interface for a device manager.
- *
- * \tparam Base class, must inherit from Device_mgr().
- *
- * Implements a create function that expects the following parameters:
- *
- *   create(L4virtio::Device cap, l4_mword_t num_ds, char const *device)
- *
- * where `num_ds` is the maximum number of dataspaces the client may create
- * and `device` the name of the device. If the client should use an entire
- * disk, then the name corresponds to the name of the disk. To connect to
- * a single partition, either the UUID of the partition or a name of the
- * form <diskid>:<partitionid>  may be used. In the latter case, partitions
- * are taken in the order found in the partition table with the first
- * partition starting at 1.
- */
-template <typename BASE>
-class Device_factory
-: public L4::Epiface_t<Device_factory<BASE>, L4::Factory>
-{
-public:
-  long op_create(L4::Factory::Rights,
-                 L4::Ipc::Cap<void> &res, l4_mword_t,
-                 L4::Ipc::Varg_list_ref valist)
-  {
-    Dbg::trace().printf("Client requests connection.\n");
-
-    L4::Ipc::Varg param = valist.next();
-
-    if (!param.is_of<l4_mword_t>())
-      {
-        Dbg::warn().printf("Expect number of dataspaces in first parameter.\n");
-        return -L4_EINVAL;
-      }
-
-    // Maximum number of dataspaces that can be registered.
-    int num_ds = param.value<l4_mword_t>();
-    if (num_ds <= 0 || num_ds > 256) // sanity check with arbitrary limit
-      {
-        Dbg::warn().printf("Number of dataspaces in first parameter must be between 1 and 256.\n");
-        return -L4_EINVAL;
-      }
-
-    param = valist.next();
-
-    // Name of device.
-    if (!param.is_of<char const *>())
-      {
-        Dbg::warn().printf("Expect device name as second parameter.\n");
-        return -L4_EINVAL;
-      }
-
-    std::string device_id(param.value<char const *>(),
-                          strnlen(param.value<char const *>(), param.length() - 1));
-
-    L4::Cap<void> cap;
-    int ret = mgr()->create_dynamic_client(
-        std::string(param.value<char const *>(), param.length() - 1),
-        -1, num_ds, &cap);
-
-    if (ret >= 0)
-      res = L4::Ipc::make_cap(cap, L4_CAP_FPAGE_RWSD);
-
-    return (ret == -L4_ENODEV && _scan_in_progress) ? -L4_EAGAIN : ret;
-  }
-
-  void scan_finished()
-  { _scan_in_progress = false; }
-
-private:
-  BASE *mgr() { return static_cast<BASE *>(this); }
-
-  bool _scan_in_progress = true;
 };
 
 } // name space
