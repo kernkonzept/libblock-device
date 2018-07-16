@@ -17,6 +17,13 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
   switch (req->header().type)
     {
     case L4VIRTIO_BLOCK_T_OUT:
+      if (device_features().ro())
+        {
+          trace.printf("Failing the write request via a read-only client.\n");
+          finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_IOERR);
+          break;
+        }
+      /* FALLTHRU */
     case L4VIRTIO_BLOCK_T_IN:
       {
         auto pending = cxx::make_unique<Pending_request>(std::move(req));

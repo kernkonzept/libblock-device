@@ -46,12 +46,13 @@ public:
   /**
    * Create a new interface for an existing device.
    *
-   * \param dev    Device to drive with this interface. The device must
-   *               have been initialized already.
-   * \param numds Maximum number of dataspaces the client is allowed to share.
+   * \param dev       Device to drive with this interface. The device must
+   *                  have been initialized already.
+   * \param numds     Maximum number of dataspaces the client is allowed to share.
+   * \param readonly  If true the client will have read-only access.
    */
-  Virtio_client(cxx::Ref_ptr<Device> const &dev, unsigned numds)
-  : Base(0x44, 0x100, dev->capacity() >> 9, dev->is_read_only()),
+  Virtio_client(cxx::Ref_ptr<Device> const &dev, unsigned numds, bool readonly)
+  : Base(0x44, 0x100, dev->capacity() >> 9, dev->is_read_only() || readonly),
     _device(dev)
   {
     init_mem_info(numds);

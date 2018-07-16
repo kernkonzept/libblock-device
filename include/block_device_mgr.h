@@ -47,11 +47,14 @@ class Device_mgr
     L4::Cap<L4::Rcv_endpoint> gate;
     /** Number of dataspaces to allocate. */
     int num_ds;
+    /** Read-only access for the client. */
+    bool readonly;
 
     Pending_client() = default;
 
-    Pending_client(L4::Cap<L4::Rcv_endpoint> g, std::string const &dev, int ds)
-    : device_id(dev), gate(g), num_ds(ds)
+    Pending_client(L4::Cap<L4::Rcv_endpoint> g, std::string const &dev, int ds,
+                   bool ro)
+    : device_id(dev), gate(g), num_ds(ds), readonly(ro)
     {}
   };
 
@@ -115,7 +118,7 @@ class Device_mgr
       if (busy)
         return -L4_EBUSY;
 
-      auto clt = cxx::make_unique<Client_type>(_device, c->num_ds);
+      auto clt = cxx::make_unique<Client_type>(_device, c->num_ds, c->readonly);
 
       if (c->gate.is_valid())
         {
@@ -194,7 +197,7 @@ public:
   }
 
   int add_static_client(L4::Cap<L4::Rcv_endpoint> client, const char *device,
-                        int partno, int num_ds)
+                        int partno, int num_ds, bool readonly = false)
   {
     char _buf[30];
     const char *buf;
@@ -215,18 +218,20 @@ public:
     else
       buf = device;
 
-    _pending_clients.emplace_back(client, buf, num_ds);
+    _pending_clients.emplace_back(client, buf, num_ds, readonly);
 
     return L4_EOK;
   }
 
   int create_dynamic_client(std::string const &device, int partno, int num_ds,
-                            L4::Cap<void> *cap)
+                            L4::Cap<void> *cap, bool readonly = false)
   {
     Pending_client clt;
 
     // Maximum number of dataspaces that can be registered.
     clt.num_ds = num_ds;
+
+    clt.readonly = readonly;
 
     clt.device_id = device;
 
