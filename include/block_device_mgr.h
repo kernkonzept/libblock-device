@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <cassert>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -147,6 +148,21 @@ class Device_mgr
       return L4_EOK;
     }
 
+    void check_clients(L4::Registry_iface *registry)
+    {
+      if (_interface)
+        {
+          if (_interface->obj_cap() && ! _interface->obj_cap().validate().label())
+            remove_client(registry);
+
+          return;
+        }
+
+      // Sub-devices only need to be checked when the parent device was free.
+      for (auto *sub : _subs)
+        sub->check_clients(registry);
+    }
+
   private:
     /**
      * Create sub devices from a partition list.
@@ -169,6 +185,20 @@ class Device_mgr
           auto conn = cxx::make_ref_obj<Connection>(cxx::Ref_ptr<Device>(pdev));
           _subs.push_front(std::move(conn));
         }
+    }
+
+    /**
+     * Disconnect the existing client.
+     */
+    void remove_client(L4::Registry_iface *registry)
+    {
+      assert(_interface);
+
+      registry->unregister_obj(_interface.get());
+      _device->reset();
+
+      // XXX handle pending requests more gracefully
+      _interface.reset();
     }
 
     bool contains_device(std::string const &name) const
@@ -272,6 +302,14 @@ public:
     return -L4_ENODEV;
   }
 
+  /**
+   * Remove clients where the client IPC gate is no longer valid.
+   */
+  void check_clients()
+  {
+    for (auto *c : _connpts)
+      c->check_clients(_registry);
+  }
 
   void add_disk(cxx::Ref_ptr<Device> &&device, Errand::Callback const &callback)
   {
