@@ -58,4 +58,27 @@ struct Device : public cxx::Ref_obj
 
 inline Device::~Device() = default;
 
+template <typename T>
+struct Device_discard_mixin: public T
+{
+  using T::T;
+
+  struct Discard_info
+  {
+    unsigned max_discard_sectors = 0;
+    unsigned max_discard_seg = 0;
+    unsigned discard_sector_alignment = 1;
+    unsigned max_write_zeroes_sectors = 0;
+    unsigned max_write_zeroes_seg = 0;
+    bool write_zeroes_may_unmap = false;
+  };
+
+  virtual Discard_info discard_info() const = 0;
+
+  /// Issues one or more WRITE_ZEROES or DISCARD commands.
+  virtual int discard(l4_uint64_t offset,
+                      Block_device::Inout_block const &blocks,
+                      Block_device::Inout_callback const &cb, bool discard) = 0;
+};
+
 } // name space

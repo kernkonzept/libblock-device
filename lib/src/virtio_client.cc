@@ -26,15 +26,16 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
       /* FALLTHRU */
     case L4VIRTIO_BLOCK_T_IN:
       {
-        auto pending = cxx::make_unique<Pending_request>(std::move(req));
+        auto pending = cxx::make_unique<Pending_inout_request>(std::move(req));
 
-        int ret = build_datablocks(pending.get());
+        int ret = build_inout_blocks(pending.get());
         if (ret >= 0)
           ret = inout_request(pending.get());
         if (ret == -L4_EBUSY)
           {
             trace.printf("Port busy, queueing request.\n");
-            _pending.push_back(cxx::move(pending));
+            _pending.push_back(
+              cxx::unique_ptr<Pending_request>(pending.release()));
             return false;
           }
         else if (ret < 0)
@@ -56,17 +57,9 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
 }
 
 void
-Block_device::Virtio_client::task_finished(Pending_request *preq,
-                                           int error, l4_size_t sz)
+Block_device::Virtio_client::task_finished(Pending_request *preq, int error,
+                                           l4_size_t sz)
 {
-  // unmap DMA regions
-  Inout_block *cur = &preq->blocks;
-  while (cur)
-    {
-      _device->dma_unmap(cur->dma_addr, cur->num_sectors, preq->dir());
-      cur = cur->next.get();
-    }
-
   // move on to the next request
   finalize_request(cxx::move(preq->request), sz, error);
   check_pending();
@@ -76,7 +69,7 @@ Block_device::Virtio_client::task_finished(Pending_request *preq,
 }
 
 int
-Block_device::Virtio_client::build_datablocks(Pending_request *preq)
+Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
 {
   auto *req = preq->request.get();
   auto dir = preq->dir();
@@ -135,21 +128,25 @@ void
 Block_device::Virtio_client::check_pending()
 {
   if (_pending.empty())
-      return;
+    return;
 
   while (!_pending.empty())
     {
-      int ret = inout_request(_pending.front());
+      int ret = _pending.front()->handle_request(this);
       if (ret == -L4_EBUSY)
         return; // still no unit available, keep element in queue
 
       // remove element from queue
       auto pending = _pending.pop_front();
 
-      if (ret < 0)
-        // on any other error, send a response to the client immediately
+      if (ret == -L4_ENOSYS)
+        // the device does not understand the request, send a response to the
+        // client immediately
         finalize_request(cxx::move(pending->request), 0,
-                         L4VIRTIO_BLOCK_S_IOERR);
+                         L4VIRTIO_BLOCK_S_UNSUPP);
+      else if (ret < 0)
+        // on any other error, send a response to the client immediately
+        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
       else
         // request has been successfully sent to hardware
         // which now has ownership of Request pointer, so release here

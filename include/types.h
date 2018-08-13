@@ -15,16 +15,20 @@
 namespace Block_device {
 
 /**
- * Description of a block to be sent to the device.
+ * Description of an inout block to be sent to the device.
  *
  * Block may be scatter gather in which case they are chained
  * via the next pointer.
  */
 struct Inout_block
 {
-  L4Re::Dma_space::Dma_addr dma_addr;
-  void *virt_addr;
-  l4_uint32_t num_sectors;
+  L4Re::Dma_space::Dma_addr dma_addr = 0;
+  void *virt_addr = nullptr;
+  /// Initial sector. Used only by DISCARD / WRITE_ZEROES requests.
+  l4_uint64_t sector = 0;
+  l4_uint32_t num_sectors = 0;
+  /// If true, WRITE_ZEROES request should attempt also to DISCARD.
+  bool unmap = false;
   cxx::unique_ptr<Inout_block> next;
 };
 

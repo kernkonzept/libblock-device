@@ -107,9 +107,51 @@ public:
 private:
   char _guid[37];
   char _partition_id[4];
+
+protected:
   cxx::Ref_ptr<Device> _parent;
   l4_uint64_t _start;
   l4_uint64_t _size;
+};
+
+template <typename T>
+class Partitioned_device_discard_mixin : public Device_discard_mixin<T>
+{
+  using Base = Device_discard_mixin<T>;
+
+  Base *get_parent() const { return static_cast<Base *>(Base::_parent.get()); }
+
+public:
+  using Base::Device_discard_mixin;
+
+  typename Base::Discard_info discard_info() const override
+  {
+    return get_parent()->discard_info();
+  }
+
+  int discard(l4_uint64_t offset, Inout_block const &blocks,
+              Inout_callback const &cb, bool discard) override
+  {
+    if (offset > Base::_size)
+      return -L4_EINVAL;
+
+    Inout_block const *cur = &blocks;
+    while (cur)
+      {
+        if (cur->sector >= Base::_size - offset)
+          return -L4_EINVAL;
+        if (cur->num_sectors > Base::_size)
+          return -L4_EINVAL;
+        if (offset + cur->sector > Base::_size - cur->num_sectors)
+          return -L4_EINVAL;
+
+        cur = cur->next.get();
+      }
+
+    Dbg::trace("partition")
+      .printf("Starting sector on disk: 0x%llx\n", offset + Base::_start);
+    return get_parent()->discard(offset + Base::_start, blocks, cb, discard);
+  }
 };
 
 } // name space
