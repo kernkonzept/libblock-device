@@ -9,50 +9,20 @@
 #include <l4/cxx/minmax>
 
 #include <l4/libblock-device/debug.h>
+#include <l4/libblock-device/gpt.h>
 #include <l4/libblock-device/partition.h>
 
-namespace {
+static
+char const *
+render_guid(void const *guid_p, char buf[])
+{
+  auto *p = static_cast<unsigned char const *>(guid_p);
+  snprintf(buf, 37,
+           "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+           p[3],  p[2], p[1],  p[0], p[5],  p[4], p[7],  p[6],
+           p[8],  p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
 
-  struct Gpt_header
-  {
-    char         signature[8];
-    l4_uint32_t  version;
-    l4_uint32_t  header_size;
-    l4_uint32_t  crc;
-    l4_uint32_t  _reserved;
-    l4_uint64_t  current_lba;
-    l4_uint64_t  backup_lba;
-    l4_uint64_t  first_lba;
-    l4_uint64_t  last_lba;
-    char         disk_guid[16];
-    l4_uint64_t  partition_array_lba;
-    l4_uint32_t  partition_array_size;
-    l4_uint32_t  entry_size;
-    l4_uint32_t  crc_array;
-  };
-
-  struct Gpt_entry
-  {
-    unsigned char type_guid[16];
-    unsigned char partition_guid[16];
-    l4_uint64_t   first;
-    l4_uint64_t   last;
-    l4_uint64_t   flags;
-    l4_uint16_t   name[36];
-  };
-
-  char const *
-  render_guid(void const *guid_p, char buf[])
-  {
-    auto *p = static_cast<unsigned char const *>(guid_p);
-    snprintf(buf, 37,
-             "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
-             p[3],  p[2], p[1],  p[0], p[5],  p[4], p[7],  p[6],
-             p[8],  p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
-
-    return buf;
-  }
-
+  return buf;
 }
 
 void
@@ -74,9 +44,9 @@ Block_device::Partition_reader::get_partition(l4_size_t idx,
     return -L4_ERANGE;
 
   unsigned secsz = _dev->sector_size();
-  auto *header = _header.get<Gpt_header const>(secsz);
+  auto *header = _header.get<Gpt::Header const>(secsz);
 
-  Gpt_entry *e = _parray.get<Gpt_entry>((idx - 1) * header->entry_size);
+  Gpt::Entry *e = _parray.get<Gpt::Entry>((idx - 1) * header->entry_size);
 
   if (*((l4_uint64_t *) &e->partition_guid) == 0ULL)
     return -L4_ENODEV;
@@ -116,7 +86,7 @@ Block_device::Partition_reader::get_gpt(int error, l4_size_t)
 
   // prepare reading of the table from disk
   unsigned secsz = _dev->sector_size();
-  auto *header = _header.get<Gpt_header const>(secsz);
+  auto *header = _header.get<Gpt::Header const>(secsz);
 
   if (strncmp(header->signature, "EFI PART", 8) != 0)
     {
