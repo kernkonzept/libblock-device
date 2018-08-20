@@ -30,11 +30,15 @@ namespace Block_device {
  * Basic class that scans devices and handles client connections.
  *
  * \tparam IF Class that will handle the client.
+ * \tparam PD Class that will implement the partition device.
  */
-template <typename IF>
+template <typename IF, typename PD = Partitioned_device>
 class Device_mgr
 {
   using Client_type = IF;
+  using Partition_type = PD;
+
+  using Pairing_callback = std::function<void(Device *)>;
 
   /**
    * A client that is waiting for a device (yet) unknown to the manager.
@@ -50,11 +54,14 @@ class Device_mgr
     /** Read-only access for the client. */
     bool readonly;
 
+    /** Callback to be called when a client is paired with a device. */
+    Pairing_callback pairing_cb;
+
     Pending_client() = default;
 
     Pending_client(L4::Cap<L4::Rcv_endpoint> g, std::string const &dev, int ds,
-                   bool ro)
-    : device_id(dev), gate(g), num_ds(ds), readonly(ro)
+                   bool ro, Pairing_callback cb)
+    : device_id(dev), gate(g), num_ds(ds), readonly(ro), pairing_cb(cb)
     {}
   };
 
@@ -92,8 +99,7 @@ class Device_mgr
         sub->unregister_interfaces(registry);
     }
 
-    int create_interface_for(Pending_client *c,
-                             L4::Registry_iface *registry)
+    int create_interface_for(Pending_client *c, L4::Registry_iface *registry)
     {
       if (_interface)
         return contains_device(c->device_id) ? -L4_EBUSY : -L4_ENODEV;
@@ -135,6 +141,9 @@ class Device_mgr
 
       _interface.reset(clt.release());
 
+      // Let it be known that the client and the device paired
+      if (c->pairing_cb)
+        c->pairing_cb(_device.get());
       return L4_EOK;
     }
 
@@ -156,7 +165,7 @@ class Device_mgr
           if (reader.get_partition(i, &info) < 0)
             continue;
 
-          Device *pdev = new Partitioned_device(_device, i, info);
+          Device *pdev = new Partition_type(_device, i, info);
           auto conn = cxx::make_ref_obj<Connection>(cxx::Ref_ptr<Device>(pdev));
           _subs.push_front(std::move(conn));
         }
@@ -197,7 +206,8 @@ public:
   }
 
   int add_static_client(L4::Cap<L4::Rcv_endpoint> client, const char *device,
-                        int partno, int num_ds, bool readonly = false)
+                        int partno, int num_ds, bool readonly = false,
+                        Pairing_callback cb = nullptr)
   {
     char _buf[30];
     const char *buf;
@@ -218,13 +228,14 @@ public:
     else
       buf = device;
 
-    _pending_clients.emplace_back(client, buf, num_ds, readonly);
+    _pending_clients.emplace_back(client, buf, num_ds, readonly, cb);
 
     return L4_EOK;
   }
 
   int create_dynamic_client(std::string const &device, int partno, int num_ds,
-                            L4::Cap<void> *cap, bool readonly = false)
+                            L4::Cap<void> *cap, bool readonly = false,
+                            Pairing_callback cb = nullptr)
   {
     Pending_client clt;
 
@@ -234,6 +245,8 @@ public:
     clt.readonly = readonly;
 
     clt.device_id = device;
+
+    clt.pairing_cb = cb;
 
     if (partno > 0)
       {
