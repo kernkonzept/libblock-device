@@ -272,7 +272,15 @@ class Client_discard_mixin: public T
       case L4VIRTIO_BLOCK_T_WRITE_ZEROES:
       case L4VIRTIO_BLOCK_T_DISCARD:
         {
-          auto pending = cxx::make_unique<Pending_cmd_request>(std::move(req));
+          auto pending = cxx::make_unique<Pending_cmd_request>(cxx::move(req));
+
+          if (this->device_features().ro())
+            {
+              trace.printf("Device read-only, failing the request\n");
+              this->finalize_request(cxx::move(pending->request), 0,
+                                     L4VIRTIO_BLOCK_S_IOERR);
+              break;
+            }
 
           int ret = build_cmd_blocks(pending.get());
           if (ret >= 0)
