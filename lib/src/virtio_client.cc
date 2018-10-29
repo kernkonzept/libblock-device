@@ -72,7 +72,14 @@ int
 Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
 {
   auto *req = preq->request.get();
+  l4_size_t sps = _device->sector_size() >> 9;
+  l4_uint64_t current_sector = req->header().sector / sps;
+  l4_uint64_t sectors = _device->capacity() / _device->sector_size();
   auto dir = preq->dir();
+
+  // Check alignment of the first sector
+  if (current_sector * sps != req->header().sector)
+    return -L4_EIO;
 
   Inout_block *last_blk = nullptr;
 
@@ -100,6 +107,12 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
           return -L4_EIO;
         };
 
+      // Check bounds
+      if (sz > sectors)
+        return -L4_EIO;
+      if (current_sector > sectors - sz)
+        return -L4_EIO;
+
       L4Re::Dma_space::Dma_addr phys;
       long ret = _device->dma_map(b.mem->ds(), off, sz, dir, &phys);
       if (ret < 0)
@@ -117,6 +130,7 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
       blk->dma_addr = phys;
       blk->virt_addr = (void *) ((l4_addr_t)b.mem->local_base() + off);
       blk->num_sectors = sz;
+      current_sector += sz;
 
       last_blk = blk;
     }
