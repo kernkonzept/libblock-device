@@ -116,6 +116,35 @@ private:
 protected:
   void check_pending();
 
+  template <typename REQ>
+  bool handle_request_error(int error, cxx::unique_ptr<REQ> pending)
+  {
+    auto trace = Dbg::trace("virtio");
+    if (error == -L4_EBUSY)
+      {
+        trace.printf("Port busy, queueing request.\n");
+        _pending.push_back(cxx::unique_ptr<Pending_request>(pending.release()));
+        return false;
+      }
+    else if (error == -L4_ENOSYS)
+      {
+        trace.printf("Unsupported operation.\n");
+        finalize_request(cxx::move(pending->request), 0,
+                         L4VIRTIO_BLOCK_S_UNSUPP);
+      }
+    else if (error < 0)
+      {
+        trace.printf("Got IO error: %d\n", error);
+        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
+      }
+    else
+      // request has been successfully sent to hardware
+      // which now has ownership of Request pointer, so release here
+      pending.release();
+
+    return true;
+  }
+
 protected:
   cxx::Ref_ptr<Device> _device;
   cxx::Unique_ptr_list<Pending_request> _pending;
@@ -140,6 +169,9 @@ class Client_discard_mixin: public T
   {
     auto *req = preq->request.get();
     bool discard = (req->header().type == L4VIRTIO_BLOCK_T_DISCARD);
+
+    if (this->device_features().ro())
+        return -L4_EIO;
 
     // sector is used only for inout requests, it must be zero for WzD
     if (req->header().sector)
@@ -266,7 +298,6 @@ class Client_discard_mixin: public T
 
   bool process_request(cxx::unique_ptr<typename T::Request> &&req) override
   {
-    auto trace = Dbg::trace("virtio");
     switch (req->header().type)
       {
       case L4VIRTIO_BLOCK_T_WRITE_ZEROES:
@@ -274,44 +305,13 @@ class Client_discard_mixin: public T
         {
           auto pending = cxx::make_unique<Pending_cmd_request>(cxx::move(req));
 
-          if (this->device_features().ro())
-            {
-              trace.printf("Device read-only, failing the request\n");
-              this->finalize_request(cxx::move(pending->request), 0,
-                                     L4VIRTIO_BLOCK_S_IOERR);
-              break;
-            }
-
           int ret = build_cmd_blocks(pending.get());
           if (ret >= 0)
             ret = cmd_request(pending.get());
-          if (ret == -L4_EBUSY)
-            {
-              trace.printf("Port busy, queueing request.\n");
-              T::_pending.push_back(
-                cxx::unique_ptr<typename T::Pending_request>(pending.release()));
-              return false;
-            }
-          else if (ret == -L4_ENOSYS)
-            {
-              trace.printf("Unsupported operation.\n");
-              this->finalize_request(cxx::move(pending->request), 0,
-                                     L4VIRTIO_BLOCK_S_UNSUPP);
-            }
-          else if (ret < 0)
-            {
-              trace.printf("Got IO error: %d\n", ret);
-              this->finalize_request(cxx::move(pending->request), 0,
-                                     L4VIRTIO_BLOCK_S_IOERR);
-            }
-          else
-            // request has been successfully sent to hardware
-            // which now has ownership of Request pointer, so release here
-            pending.release();
-          break;
+          return this->handle_request_error(ret, cxx::move(pending));
         }
       default:
-        return T::process_request(std::move(req));
+        return T::process_request(cxx::move(req));
       }
 
     return true;

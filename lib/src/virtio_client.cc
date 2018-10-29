@@ -17,37 +17,14 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
   switch (req->header().type)
     {
     case L4VIRTIO_BLOCK_T_OUT:
-      if (device_features().ro())
-        {
-          trace.printf("Failing the write request via a read-only client.\n");
-          finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_IOERR);
-          break;
-        }
-      /* FALLTHRU */
     case L4VIRTIO_BLOCK_T_IN:
       {
-        auto pending = cxx::make_unique<Pending_inout_request>(std::move(req));
+        auto pending = cxx::make_unique<Pending_inout_request>(cxx::move(req));
 
         int ret = build_inout_blocks(pending.get());
         if (ret >= 0)
           ret = inout_request(pending.get());
-        if (ret == -L4_EBUSY)
-          {
-            trace.printf("Port busy, queueing request.\n");
-            _pending.push_back(
-              cxx::unique_ptr<Pending_request>(pending.release()));
-            return false;
-          }
-        else if (ret < 0)
-          {
-            trace.printf("Got IO error: %d\n", ret);
-            finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
-          }
-        else
-          // request has been successfully sent to hardware
-          // which now has ownership of Request pointer, so release here
-          pending.release();
-        break;
+        return handle_request_error(ret, cxx::move(pending));
       }
     default:
       finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_UNSUPP);
@@ -76,6 +53,10 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
   l4_uint64_t current_sector = req->header().sector / sps;
   l4_uint64_t sectors = _device->capacity() / _device->sector_size();
   auto dir = preq->dir();
+
+  // If RO was offered, every write must fail
+  if (req->header().type == L4VIRTIO_BLOCK_T_OUT && device_features().ro())
+    return -L4_EIO;
 
   // Check alignment of the first sector
   if (current_sector * sps != req->header().sector)
