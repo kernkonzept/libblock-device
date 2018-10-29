@@ -83,9 +83,14 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
 
   Inout_block *last_blk = nullptr;
 
+  size_t seg = 0;
+
   while (req->has_more())
     {
       Request::Data_block b;
+
+      if (++seg > _device->max_segments())
+        return -L4_EIO;
 
       try
         {
