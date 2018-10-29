@@ -14,6 +14,13 @@
 
 namespace Block_device {
 
+/** Flags used in Inout_block */
+enum Inout_flags
+  {
+    Inout_f_wb = 1,     ///< Assume write-back cache.
+    Inout_f_unmap = 2,  ///< Discard functionality desired.
+  };
+
 /**
  * Description of an inout block to be sent to the device.
  *
@@ -27,8 +34,8 @@ struct Inout_block
   /// Initial sector. Used only by DISCARD / WRITE_ZEROES requests.
   l4_uint64_t sector = 0;
   l4_uint32_t num_sectors = 0;
-  /// If true, WRITE_ZEROES request should attempt also to DISCARD.
-  bool unmap = false;
+  /// Flags from Inout_flags.
+  l4_uint32_t flags = 0;
   cxx::unique_ptr<Inout_block> next;
 };
 

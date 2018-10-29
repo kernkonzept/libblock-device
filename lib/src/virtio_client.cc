@@ -20,10 +20,17 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
     case L4VIRTIO_BLOCK_T_IN:
       {
         auto pending = cxx::make_unique<Pending_inout_request>(cxx::move(req));
-
         int ret = build_inout_blocks(pending.get());
         if (ret >= 0)
           ret = inout_request(pending.get());
+        return handle_request_error(ret, cxx::move(pending));
+      }
+    case L4VIRTIO_BLOCK_T_FLUSH:
+      {
+        auto pending = cxx::make_unique<Pending_flush_request>(cxx::move(req));
+        int ret = check_flush_request(pending.get());
+        if (ret == L4_EOK)
+          ret = flush_request(pending.get());
         return handle_request_error(ret, cxx::move(pending));
       }
     default:
@@ -54,9 +61,22 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
   l4_uint64_t sectors = _device->capacity() / _device->sector_size();
   auto dir = preq->dir();
 
-  // If RO was offered, every write must fail
-  if (req->header().type == L4VIRTIO_BLOCK_T_OUT && device_features().ro())
-    return -L4_EIO;
+  l4_uint32_t flags = 0;
+  if (req->header().type == L4VIRTIO_BLOCK_T_OUT)
+    {
+      // If RO was offered, every write must fail
+      if (device_features().ro())
+        return -L4_EIO;
+
+      // Figure out whether the write has a write-through or write-back semantics
+      if (_negotiated_features.config_wce())
+        {
+          if (get_writeback() == 1)
+            flags = Block_device::Inout_f_wb;
+        }
+      else if (_negotiated_features.flush())
+        flags = Block_device::Inout_f_wb;
+    }
 
   // Check alignment of the first sector
   if (current_sector * sps != req->header().sector)
@@ -117,6 +137,7 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
       blk->virt_addr = (void *) ((l4_addr_t)b.mem->local_base() + off);
       blk->num_sectors = sz;
       current_sector += sz;
+      blk->flags = flags;
 
       last_blk = blk;
     }

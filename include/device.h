@@ -52,6 +52,9 @@ struct Device : public cxx::Ref_obj
                          Block_device::Inout_callback const &cb,
                          L4Re::Dma_space::Direction dir) = 0;
 
+  /// Flush device internal caches.
+  virtual int flush(Block_device::Inout_callback const &cb) = 0;
+
   /// Initialises the device.
   virtual void start_device_scan(Block_device::Errand::Callback const &callback) = 0;
 };

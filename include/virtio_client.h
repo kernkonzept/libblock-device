@@ -58,6 +58,14 @@ protected:
 
   };
 
+  struct Pending_flush_request : public Pending_request
+  {
+    using Pending_request::Pending_request;
+    int handle_request(Virtio_client *client) override
+    {
+      return client->flush_request(this);
+    }
+  };
 
 public:
   /**
@@ -75,6 +83,8 @@ public:
     init_mem_info(numds);
     set_seg_max(dev->max_segments());
     set_size_max(0x400000); // 4MB XXX???
+    set_flush();
+    set_config_wce(0); // starting in write-through mode
   }
 
   /**
@@ -113,6 +123,33 @@ private:
                                preq->dir());
   }
 
+  int check_flush_request(Pending_flush_request *preq)
+  {
+    if (!_negotiated_features.flush())
+        return -L4_ENOSYS;
+
+    auto *req = preq->request.get();
+
+    // sector must be zero for FLUSH
+    if (req->header().sector)
+      return -L4_ENOSYS;
+
+    return L4_EOK;
+  }
+
+  int flush_request(Pending_flush_request *preq)
+  {
+    return _device->flush([this, preq](int error, l4_size_t sz) {
+      task_finished(preq, error, sz);
+    });
+  }
+
+  bool check_features(void) override
+  {
+    _negotiated_features = negotiated_features();
+    return true;
+  }
+
 protected:
   void check_pending();
 
@@ -148,6 +185,8 @@ protected:
 protected:
   cxx::Ref_ptr<Device> _device;
   cxx::Unique_ptr_list<Pending_request> _pending;
+
+  L4virtio::Svr::Block_features _negotiated_features;
 };
 
 template <typename T>
@@ -274,7 +313,8 @@ class Client_discard_mixin: public T
 
             blk->sector = p.sector;
             blk->num_sectors = p.num_sectors;
-            blk->unmap = p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP;
+            if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP)
+              blk->flags = Inout_f_unmap;
 
             last_blk = blk;
           }

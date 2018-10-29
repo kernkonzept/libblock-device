@@ -101,6 +101,11 @@ public:
     return _parent->inout_data(sector + _start, blocks, cb, dir);
   }
 
+  int flush(Inout_callback const &cb) override
+  {
+    return _parent->flush(cb);
+  }
+
   void start_device_scan(Block_device::Errand::Callback const &callback) override
   { callback(); }
 
