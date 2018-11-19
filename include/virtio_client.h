@@ -218,12 +218,12 @@ class Client_discard_mixin: public T
 
     if (discard)
       {
-        if (!T::device_features().discard())
+        if (!T::negotiated_features().discard())
           return -L4_ENOSYS;
       }
     else
       {
-        if (!T::device_features().write_zeroes())
+        if (!T::negotiated_features().write_zeroes())
           return -L4_ENOSYS;
       }
 
