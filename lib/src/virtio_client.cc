@@ -12,6 +12,14 @@ bool
 Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
 {
   auto trace = Dbg::trace("virtio");
+
+  if (_shutdown_state != Shutdown_type::Running)
+    {
+      trace.printf("Failing requests as the client is shutting down\n");
+      this->finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_IOERR);
+      return false;
+    }
+
   trace.printf("request received: type 0x%x, sector 0x%llx\n",
                req->header().type, req->header().sector);
   switch (req->header().type)
@@ -45,7 +53,10 @@ Block_device::Virtio_client::task_finished(Pending_request *preq, int error,
                                            l4_size_t sz)
 {
   // move on to the next request
-  finalize_request(cxx::move(preq->request), sz, error);
+
+  // Only finalize if the client is still alive
+  if (_shutdown_state != Client_gone)
+    finalize_request(cxx::move(preq->request), sz, error);
   check_pending();
 
   // pending request can be dropped
@@ -176,4 +187,28 @@ Block_device::Virtio_client::check_pending()
 
   // clean out requests in the virtqueue
   kick();
+}
+
+/**
+ * Drain the pending queue
+ *
+ * @param finalize  If true, pending requests will be finalized with error. In
+ *                  that case, the client memory must be still accessible.
+ *                  If false, pending requests will not be finalized, because the
+ *                  client memory (virtqueue and buffers) is expected not to be
+ *                  accessible.
+ */
+void Block_device::Virtio_client::drain_pending(bool finalize)
+{
+  while (!_pending.empty())
+    {
+      // remove element from queue
+      auto pending = _pending.pop_front();
+
+      if (finalize)
+        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
+
+      // If pending still points to the request, it will be destroyed as we go
+      // out of scope or pending is reassigned in the next iteration
+    }
 }

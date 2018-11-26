@@ -20,10 +20,9 @@
 namespace Block_device {
 
 class Virtio_client
-: public L4virtio::Svr::Block_dev<L4virtio::Svr::No_custom_data>
+: public L4virtio::Svr::Block_dev_base<L4virtio::Svr::No_custom_data>,
+  public L4::Epiface_t<Virtio_client, L4virtio::Device>
 {
-  using Base = L4virtio::Svr::Block_dev<L4virtio::Svr::No_custom_data>;
-
 protected:
   struct Pending_request
   : cxx::Unique_ptr_list_item<Pending_request>
@@ -77,27 +76,118 @@ public:
    * \param readonly  If true the client will have read-only access.
    */
   Virtio_client(cxx::Ref_ptr<Device> const &dev, unsigned numds, bool readonly)
-  : Base(0x44, 0x100, dev->capacity() >> 9, dev->is_read_only() || readonly),
+  : L4virtio::Svr::Block_dev_base<
+      L4virtio::Svr::No_custom_data>(0x44, 0x100, dev->capacity() >> 9,
+                                     dev->is_read_only() || readonly),
+    _numds(numds),
     _device(dev)
   {
-    init_mem_info(numds);
-    set_seg_max(dev->max_segments());
-    set_size_max(0x400000); // 4MB XXX???
-    set_flush();
-    set_config_wce(0); // starting in write-through mode
+    reset_client();
   }
 
   /**
    * Reset the hardware device driven by this interface.
    */
   void reset_device() override
-  { _device->reset(); }
+  {
+    drain_pending(false);
+    _device->reset();
+    _negotiated_features.raw = 0;
+  }
+
+  /**
+   * Reinitialize the client.
+   */
+  bool reset_client() override
+  {
+    init_mem_info(_numds);
+    set_seg_max(_device->max_segments());
+    set_size_max(0x400000); // 4MB XXX???
+    set_flush();
+    set_config_wce(0); // starting in write-through mode
+    _shutdown_state = Shutdown_type::Running;
+    _negotiated_features.raw = 0;
+    return true;
+  }
 
   bool queue_stopped() override
   { return !_pending.empty(); }
 
   bool process_request(cxx::unique_ptr<Request> &&req) override;
   void task_finished(Pending_request *preq, int error, l4_size_t sz);
+
+  /**
+   * Process a shutdown event on the client
+   */
+  void shutdown_event(Shutdown_type type)
+  {
+    // Transitions from Client_gone are not allowed as the client must be
+    // destroyed before another shutdown event handling
+    l4_assert(_shutdown_state != Client_gone);
+
+    // Transitions from System_shutdown are also not allowed, the initiator
+    // should take care of graceful handling of this.
+    l4_assert(_shutdown_state != System_shutdown);
+    // If we are transitioning from System_suspend, it must be only to Running,
+    // the initiator should handle this gracefully.
+    l4_assert(_shutdown_state != System_suspend
+              || type == Shutdown_type::Running);
+
+    // Update shutdown state of the client
+    _shutdown_state = type;
+
+    if (type == Shutdown_type::Client_shutdown)
+      {
+        reset();
+        reset_client();
+        // Client_shutdown must transit to the Running state
+        l4_assert(_shutdown_state == Shutdown_type::Running);
+      }
+
+    if (type != Shutdown_type::Running)
+      {
+        drain_pending(type != Client_gone);
+        _device->reset();
+      }
+  }
+
+  /**
+   * Attach device to an object registry.
+   *
+   * \param registry Object registry that will be responsible for dispatching
+   *                 requests.
+   * \param service  Name of an existing capability the device should use.
+   *
+   * This functions registers the general virtio interface as well as the
+   * interrupt handler which is used for receiving client notifications.
+   */
+  L4::Cap<void> register_obj(L4::Registry_iface *registry,
+                             char const *service = 0)
+  {
+    L4Re::chkcap(registry->register_irq_obj(this->irq_iface()));
+    L4::Cap<void> ret;
+    if (service)
+      ret = registry->register_obj(this, service);
+    else
+      ret = registry->register_obj(this);
+    L4Re::chkcap(ret);
+
+    return ret;
+  }
+
+  L4::Cap<void> register_obj(L4::Registry_iface *registry,
+                             L4::Cap<L4::Rcv_endpoint> ep)
+  {
+    L4Re::chkcap(registry->register_irq_obj(this->irq_iface()));
+
+    return L4Re::chkcap(registry->register_obj(this, ep));
+  }
+
+protected:
+  L4::Ipc_svr::Server_iface *server_iface() const override
+  {
+    return this->L4::Epiface::server_iface();
+  }
 
 private:
   int build_inout_blocks(Pending_inout_request *preq);
@@ -152,6 +242,7 @@ private:
 
 protected:
   void check_pending();
+  void drain_pending(bool finalize);
 
   template <typename REQ>
   bool handle_request_error(int error, cxx::unique_ptr<REQ> pending)
@@ -183,6 +274,8 @@ protected:
   }
 
 protected:
+  unsigned _numds;
+  Shutdown_type _shutdown_state;
   cxx::Ref_ptr<Device> _device;
   cxx::Unique_ptr_list<Pending_request> _pending;
 
@@ -338,6 +431,15 @@ class Client_discard_mixin: public T
 
   bool process_request(cxx::unique_ptr<typename T::Request> &&req) override
   {
+    auto trace = Dbg::trace("virtio");
+
+    if (this->_shutdown_state != Shutdown_type::Running)
+      {
+        trace.printf("Failing requests as the client is shutting down\n");
+        this->finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_IOERR);
+        return false;
+      }
+
     switch (req->header().type)
       {
       case L4VIRTIO_BLOCK_T_WRITE_ZEROES:

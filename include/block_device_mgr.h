@@ -70,7 +70,8 @@ class Device_mgr
   {
   public:
     explicit Connection(cxx::Ref_ptr<Device> &&dev)
-    : _device(cxx::move(dev))
+    : _shutdown_state(Shutdown_type::Running),
+      _device(cxx::move(dev))
     {}
 
     L4::Cap<void> cap() const
@@ -102,6 +103,9 @@ class Device_mgr
 
     int create_interface_for(Pending_client *c, L4::Registry_iface *registry)
     {
+      if (_shutdown_state != Shutdown_type::Running)
+        return -L4_EIO;
+
       if (_interface)
         return contains_device(c->device_id) ? -L4_EBUSY : -L4_ENODEV;
 
@@ -152,7 +156,7 @@ class Device_mgr
     {
       if (_interface)
         {
-          if (_interface->obj_cap() && ! _interface->obj_cap().validate().label())
+          if (_interface->obj_cap() && !_interface->obj_cap().validate().label())
             remove_client(registry);
 
           return;
@@ -161,6 +165,17 @@ class Device_mgr
       // Sub-devices only need to be checked when the parent device was free.
       for (auto *sub : _subs)
         sub->check_clients(registry);
+    }
+
+    /** Process a shutdown event on the connection */
+    void shutdown_event(Shutdown_type type)
+    {
+      // Set new shutdown state
+      _shutdown_state = type;
+      for (auto const &sub: _subs)
+        sub->shutdown_event(type);
+      if (_interface)
+        _interface->shutdown_event(type);
     }
 
   private:
@@ -195,9 +210,9 @@ class Device_mgr
       assert(_interface);
 
       registry->unregister_obj(_interface.get());
-      _device->reset();
 
-      // XXX handle pending requests more gracefully
+      _interface->shutdown_event(Shutdown_type::Client_gone);
+
       _interface.reset();
     }
 
@@ -216,10 +231,12 @@ class Device_mgr
     bool match_hid(std::string const &name) const
     { return _device->match_hid(cxx::String(name.c_str(), name.length())); }
 
+    /// Current shutdown state
+    Shutdown_type _shutdown_state;
     /// The device itself.
     cxx::Ref_ptr<Device> _device;
     /// Client interface.
-    cxx::unique_ptr<L4::Epiface> _interface;
+    cxx::unique_ptr<Client_type> _interface;
     /// Partitions of the device.
     cxx::Ref_ptr_list<Connection> _subs;
   };
@@ -322,6 +339,16 @@ public:
           connect_static_clients(conn.get());
           callback();
         });
+  }
+
+  /** Process a shutdown event on all connections */
+  void shutdown_event(Shutdown_type type)
+  {
+    l4_assert(type != Client_gone);
+    l4_assert(type != Client_shutdown);
+
+    for (auto const &con : _connpts)
+      con->shutdown_event(type);
   }
 
 private:

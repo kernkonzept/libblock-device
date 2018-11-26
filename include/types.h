@@ -21,6 +21,21 @@ enum Inout_flags
     Inout_f_unmap = 2,  ///< Discard functionality desired.
   };
 
+enum Shutdown_type
+{
+  /// No shutdown in progress or waking up from suspend.
+  Running = 0,
+  /// The client capability has abruptly disappeared, presumably because the
+  //  client had crashed.
+  Client_gone,
+  /// The client issued a shutdown RPC.
+  Client_shutdown,
+  /// The system is shutting down.
+  System_shutdown,
+  /// The system is suspending.
+  System_suspend
+};
+
 /**
  * Description of an inout block to be sent to the device.
  *
