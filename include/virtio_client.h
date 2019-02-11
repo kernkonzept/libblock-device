@@ -191,6 +191,18 @@ protected:
   }
 
 private:
+  void release_dma(Pending_inout_request *req)
+  {
+    // unmap DMA regions
+    Inout_block *cur = &req->blocks;
+    while (cur)
+      {
+        if (cur->num_sectors)
+          _device->dma_unmap(cur->dma_addr, cur->num_sectors, req->dir());
+        cur = cur->next.get();
+      }
+  }
+
   int build_inout_blocks(Pending_inout_request *preq);
 
   int inout_request(Pending_inout_request *preq)
@@ -200,15 +212,7 @@ private:
 
     return _device->inout_data(sector, preq->blocks,
                                [this, preq](int error, l4_size_t sz) {
-                                 // unmap DMA regions
-                                 Inout_block *cur = &preq->blocks;
-                                 while (cur)
-                                   {
-                                     _device->dma_unmap(cur->dma_addr,
-                                                        cur->num_sectors,
-                                                        preq->dir());
-                                     cur = cur->next.get();
-                                   }
+                                 release_dma(preq);
                                  task_finished(preq, error, sz);
                                },
                                preq->dir());

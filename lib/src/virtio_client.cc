@@ -31,6 +31,8 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
         int ret = build_inout_blocks(pending.get());
         if (ret >= 0)
           ret = inout_request(pending.get());
+        else
+          release_dma(pending.get());
         return handle_request_error(ret, cxx::move(pending));
       }
     case L4VIRTIO_BLOCK_T_FLUSH:
@@ -130,11 +132,6 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
       if (current_sector > sectors - sz)
         return -L4_EIO;
 
-      L4Re::Dma_space::Dma_addr phys;
-      long ret = _device->dma_map(b.mem, off, sz, dir, &phys);
-      if (ret < 0)
-        return ret;
-
       Inout_block *blk;
       if (last_blk)
         {
@@ -143,6 +140,11 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
         }
       else
         blk = &preq->blocks;
+
+      L4Re::Dma_space::Dma_addr phys;
+      long ret = _device->dma_map(b.mem, off, sz, dir, &phys);
+      if (ret < 0)
+        return ret;
 
       blk->dma_addr = phys;
       blk->virt_addr = (void *) ((l4_addr_t)b.mem->local_base() + off);
