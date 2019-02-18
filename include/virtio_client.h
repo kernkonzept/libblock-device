@@ -357,13 +357,11 @@ class Client_discard_mixin: public T
           {
             auto p = cxx::access_once<l4virtio_block_discard_t>(&payload[i]);
 
-            // Check alignment
-            auto align = (discard || p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP)
-                           ? sps * _di.discard_sector_alignment
-                           : sps;
-            if (p.sector % align != 0)
+            // Check sector size alignment. Discard sector alignment is not
+            // strictly enforced as it is merely a hint to the driver.
+            if (p.sector % sps != 0)
               return -L4_EIO;
-            if (p.num_sectors % align != 0)
+            if (p.num_sectors % sps != 0)
               return -L4_EIO;
 
             // Convert to the device sector size
