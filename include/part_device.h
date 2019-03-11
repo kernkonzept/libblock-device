@@ -70,10 +70,10 @@ public:
   void reset() override
   {}
 
-  int dma_map(L4::Cap<L4Re::Dataspace> ds, l4_addr_t offset,
+  int dma_map(Block_device::Mem_region *region, l4_addr_t offset,
               l4_size_t num_sectors, L4Re::Dma_space::Direction dir,
               L4Re::Dma_space::Dma_addr *phys) override
-  { return _parent->dma_map(ds, offset, num_sectors, dir, phys); }
+  { return _parent->dma_map(region, offset, num_sectors, dir, phys); }
 
   int dma_unmap(L4Re::Dma_space::Dma_addr phys, l4_size_t num_sectors,
                 L4Re::Dma_space::Direction dir) override

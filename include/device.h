@@ -38,7 +38,7 @@ struct Device : public cxx::Ref_obj
   virtual void reset() = 0;
 
   /// Prepares the given data space for DMA with the device.
-  virtual int dma_map(L4::Cap<L4Re::Dataspace> ds, l4_addr_t offset,
+  virtual int dma_map(Block_device::Mem_region *region, l4_addr_t offset,
                       l4_size_t num_sectors, L4Re::Dma_space::Direction dir,
                       L4Re::Dma_space::Dma_addr *phys) = 0;
 

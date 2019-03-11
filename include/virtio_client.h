@@ -20,7 +20,7 @@
 namespace Block_device {
 
 class Virtio_client
-: public L4virtio::Svr::Block_dev_base<L4virtio::Svr::No_custom_data>,
+: public L4virtio::Svr::Block_dev_base<Mem_region_info>,
   public L4::Epiface_t<Virtio_client, L4virtio::Device>
 {
 protected:
@@ -76,9 +76,10 @@ public:
    * \param readonly  If true the client will have read-only access.
    */
   Virtio_client(cxx::Ref_ptr<Device> const &dev, unsigned numds, bool readonly)
-  : L4virtio::Svr::Block_dev_base<L4virtio::Svr::No_custom_data>(
-      L4VIRTIO_VENDOR_KK, 0x100, dev->capacity() >> 9,
-      dev->is_read_only() || readonly),
+  : L4virtio::Svr::Block_dev_base<Mem_region_info>(L4VIRTIO_VENDOR_KK, 0x100,
+                                                   dev->capacity() >> 9,
+                                                   dev->is_read_only()
+                                                     || readonly),
     _numds(numds),
     _device(dev)
   {

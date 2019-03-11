@@ -46,9 +46,10 @@ public:
                                  L4_PAGESHIFT),
                  "Attach IO memory.");
 
-    _cap = cxx::move(lcap);
-
-    L4Re::chksys(_device->dma_map(_cap.get(), 0, _num_sectors, dir, &_paddr),
+    _mem_region =
+      cxx::make_unique<Block_device::Mem_region>(0, sz, 0, cxx::move(lcap));
+    L4Re::chksys(_device->dma_map(_mem_region.get(), 0, _num_sectors, dir,
+                                  &_paddr),
                  "Lock memory region for DMA.");
   }
 
@@ -60,7 +61,7 @@ public:
     if (this != &rhs)
       {
         _device = rhs._device;
-        _cap = cxx::move(rhs._cap);
+        _mem_region = cxx::move(rhs._mem_region);
         _region = cxx::move(rhs._region);
         _paddr = rhs._paddr;
         _dir = rhs._dir;
@@ -102,7 +103,7 @@ public:
 
 private:
   Device *_device;
-  L4Re::Util::Unique_cap<L4Re::Dataspace> _cap;
+  cxx::unique_ptr<Block_device::Mem_region> _mem_region;
   L4Re::Rm::Unique_region<char *> _region;
   L4Re::Dma_space::Dma_addr _paddr;
   L4Re::Dma_space::Direction _dir;

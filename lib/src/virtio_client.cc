@@ -131,7 +131,7 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
         return -L4_EIO;
 
       L4Re::Dma_space::Dma_addr phys;
-      long ret = _device->dma_map(b.mem->ds(), off, sz, dir, &phys);
+      long ret = _device->dma_map(b.mem, off, sz, dir, &phys);
       if (ret < 0)
         return ret;
 

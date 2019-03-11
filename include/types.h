@@ -11,6 +11,7 @@
 
 #include <l4/cxx/unique_ptr>
 #include <l4/re/dma_space>
+#include <l4/l4virtio/server/l4virtio>
 
 namespace Block_device {
 
@@ -35,6 +36,26 @@ enum Shutdown_type
   /// The system is suspending.
   System_suspend
 };
+
+/**
+ * Base class used by the driver implementation to derive its own DMA mapping
+ * tracking structure.
+ */
+struct Dma_region_info
+{
+};
+
+/**
+ * Additional info stored in each L4virtio::Svr::Driver_mem_region_t used for
+ * tracking dataspace-wide DMA mappings.
+ */
+struct Mem_region_info
+{
+  cxx::unique_ptr<Dma_region_info> dma_info;
+};
+
+using Mem_region =
+  L4virtio::Svr::Driver_mem_region_t<Mem_region_info>;
 
 /**
  * Description of an inout block to be sent to the device.
