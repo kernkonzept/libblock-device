@@ -28,7 +28,7 @@ protected:
   : cxx::Unique_ptr_list_item<Pending_request>
   {
     explicit Pending_request(cxx::unique_ptr<Request> &&req)
-    : request(std::move(req))
+    : request(cxx::move(req))
     {}
 
     virtual ~Pending_request() = default;
@@ -465,7 +465,7 @@ class Client_discard_mixin: public T
 public:
   template <typename... Args>
   Client_discard_mixin(cxx::Ref_ptr<Device> const &dev, Args &&... args)
-  : T(dev, std::forward<Args>(args)...)
+  : T(dev, cxx::forward<Args>(args)...)
   {
     auto *d = static_cast<Device_discard_mixin<Device> *>(dev.get());
     _di = d->discard_info();
