@@ -161,6 +161,9 @@ public:
    *
    * This functions registers the general virtio interface as well as the
    * interrupt handler which is used for receiving client notifications.
+   *
+   * The caller is responsible to call `unregister_obj()` before destroying
+   * the client object.
    */
   L4::Cap<void> register_obj(L4::Registry_iface *registry,
                              char const *service = 0)
@@ -182,6 +185,17 @@ public:
     L4Re::chkcap(registry->register_irq_obj(this->irq_iface()));
 
     return L4Re::chkcap(registry->register_obj(this, ep));
+  }
+
+  /**
+   * Detach device from object registry.
+   *
+   * \param registry  Object registry previously used for `register_obj()`.
+   */
+  void unregister_obj(L4::Registry_iface *registry)
+  {
+    registry->unregister_obj(this->irq_iface());
+    registry->unregister_obj(this);
   }
 
 protected:

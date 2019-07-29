@@ -209,10 +209,8 @@ class Device_mgr
     {
       assert(_interface);
 
-      registry->unregister_obj(_interface.get());
-
+      _interface->unregister_obj(registry);
       _interface->shutdown_event(Shutdown_type::Client_gone);
-
       _interface.reset();
     }
 
