@@ -14,6 +14,7 @@
 
 #include <l4/libblock-device/errand.h>
 #include <l4/libblock-device/types.h>
+#include <l4/libblock-device/request_queue.h>
 
 namespace Block_device {
 
@@ -34,6 +35,16 @@ struct Device : public cxx::Ref_obj
   /// Returns the maximum number of requests the device can handle in parallel.
   virtual unsigned max_in_flight() const = 0;
 
+  /**
+   * Return the device-global device queue.
+   *
+   * Queues must be allocated such that all clients that require a shared
+   * pool of resources to complete their requests, also use the same request
+   * queue. In particular, if two devices access common resources, then they
+   * must provide the same queue.
+   */
+  virtual Request_queue *request_queue() = 0;
+
   /// Resets the device into a good known state.
   virtual void reset() = 0;
 
@@ -46,13 +57,35 @@ struct Device : public cxx::Ref_obj
   virtual int dma_unmap(L4Re::Dma_space::Dma_addr phys, l4_size_t num_sectors,
                         L4Re::Dma_space::Direction dir) = 0;
 
-  /// Reads or writes one or more of blocks.
+  /**
+   * Read or write one or more blocks to/from the device.
+   *
+   * \param sector  Number of the first sector to use for the operation.
+   * \param blocks  Linked list of blocks with payload data.
+   * \param cb      (Optional) callback called when the request is finished.
+   *                The callback is called only, when the function has
+   *                previously successfully returned.
+   * \param dir     Direction of the operation (read or write).
+   *
+   * \retval L4_EOK     Request was successfully issued.
+   * \retval -L4_EBUSY  Device is busy with other requests, try again later.
+   * \retval <0         Other non-recoverable error.
+   */
   virtual int inout_data(l4_uint64_t sector,
                          Block_device::Inout_block const &blocks,
                          Block_device::Inout_callback const &cb,
                          L4Re::Dma_space::Direction dir) = 0;
 
-  /// Flush device internal caches.
+  /** Flush device internal caches.
+   *
+   * \param cb      (Optional) callback called when the request is finished.
+   *                The callback is called only, when the function has
+   *                previously successfully returned.
+   *
+   * \retval L4_EOK     Request was successfully issued.
+   * \retval -L4_EBUSY  Device is busy with other requests, try again later.
+   * \retval <0         Other non-recoverable error.
+   */
   virtual int flush(Block_device::Inout_callback const &cb) = 0;
 
   /// Initialises the device.
@@ -60,6 +93,16 @@ struct Device : public cxx::Ref_obj
 };
 
 inline Device::~Device() = default;
+
+class Base_device : public Device
+{
+public:
+  Request_queue *request_queue() override
+  { return &_request_queue; }
+
+private:
+  Simple_request_queue _request_queue;
+};
 
 template <typename T>
 struct Device_discard_mixin: public T

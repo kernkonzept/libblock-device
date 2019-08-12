@@ -30,18 +30,27 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
         auto pending = cxx::make_unique<Pending_inout_request>(cxx::move(req));
         int ret = build_inout_blocks(pending.get());
         if (ret >= 0)
-          ret = inout_request(pending.get());
-        else
-          release_dma(pending.get());
-        return handle_request_error(ret, cxx::move(pending));
+          {
+            if (_pending && !_pending->empty())
+              ret = -L4_EBUSY; // make sure to keep request order
+            else
+              ret = inout_request(pending.get());
+          } else
+            release_dma(pending.get());
+        return handle_request_result(ret, cxx::move(pending));
       }
     case L4VIRTIO_BLOCK_T_FLUSH:
       {
         auto pending = cxx::make_unique<Pending_flush_request>(cxx::move(req));
         int ret = check_flush_request(pending.get());
         if (ret == L4_EOK)
-          ret = flush_request(pending.get());
-        return handle_request_error(ret, cxx::move(pending));
+          {
+            if (_pending && !_pending->empty())
+              ret = -L4_EBUSY; // make sure to keep request order
+            else
+              ret = flush_request(pending.get());
+          }
+        return handle_request_result(ret, cxx::move(pending));
       }
     default:
       finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_UNSUPP);
@@ -51,7 +60,7 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
 }
 
 void
-Block_device::Virtio_client::task_finished(Pending_request *preq, int error,
+Block_device::Virtio_client::task_finished(Generic_pending_request *preq, int error,
                                            l4_size_t sz)
 {
   // move on to the next request
@@ -59,7 +68,9 @@ Block_device::Virtio_client::task_finished(Pending_request *preq, int error,
   // Only finalize if the client is still alive
   if (_shutdown_state != Client_gone)
     finalize_request(cxx::move(preq->request), sz, error);
-  check_pending();
+
+  if (_pending)
+    _pending->process_pending();
 
   // pending request can be dropped
   cxx::unique_ptr<Pending_request> ureq(preq);
@@ -156,61 +167,4 @@ Block_device::Virtio_client::build_inout_blocks(Pending_inout_request *preq)
     }
 
   return L4_EOK;
-}
-
-void
-Block_device::Virtio_client::check_pending()
-{
-  if (_pending.empty())
-    return;
-
-  while (!_pending.empty())
-    {
-      int ret = _pending.front()->handle_request(this);
-      if (ret == -L4_EBUSY)
-        return; // still no unit available, keep element in queue
-
-      // remove element from queue
-      auto pending = _pending.pop_front();
-
-      if (ret == -L4_ENOSYS)
-        // the device does not understand the request, send a response to the
-        // client immediately
-        finalize_request(cxx::move(pending->request), 0,
-                         L4VIRTIO_BLOCK_S_UNSUPP);
-      else if (ret < 0)
-        // on any other error, send a response to the client immediately
-        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
-      else
-        // request has been successfully sent to hardware
-        // which now has ownership of Request pointer, so release here
-        pending.release();
-    }
-
-  // clean out requests in the virtqueue
-  kick();
-}
-
-/**
- * Drain the pending queue
- *
- * @param finalize  If true, pending requests will be finalized with error. In
- *                  that case, the client memory must be still accessible.
- *                  If false, pending requests will not be finalized, because the
- *                  client memory (virtqueue and buffers) is expected not to be
- *                  accessible.
- */
-void Block_device::Virtio_client::drain_pending(bool finalize)
-{
-  while (!_pending.empty())
-    {
-      // remove element from queue
-      auto pending = _pending.pop_front();
-
-      if (finalize)
-        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
-
-      // If pending still points to the request, it will be destroyed as we go
-      // out of scope or pending is reassigned in the next iteration
-    }
 }

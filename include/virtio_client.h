@@ -16,6 +16,7 @@
 #include <l4/libblock-device/debug.h>
 #include <l4/libblock-device/device.h>
 #include <l4/libblock-device/types.h>
+#include <l4/libblock-device/request_queue.h>
 
 namespace Block_device {
 
@@ -24,24 +25,35 @@ class Virtio_client
   public L4::Epiface_t<Virtio_client, L4virtio::Device>
 {
 protected:
-  struct Pending_request
-  : cxx::Unique_ptr_list_item<Pending_request>
+  class Generic_pending_request : public Pending_request
   {
-    explicit Pending_request(cxx::unique_ptr<Request> &&req)
+  protected:
+    int check_error(int result, Virtio_client *client)
+    {
+      if (result < 0 && result != -L4_EBUSY)
+        client->handle_request_error(result, this);
+
+      return result;
+    }
+
+  public:
+    explicit Generic_pending_request(cxx::unique_ptr<Request> &&req)
     : request(cxx::move(req))
     {}
 
-    virtual ~Pending_request() = default;
+    void fail_request(Virtio_client *owner) override
+    {
+      owner->finalize_request(cxx::move(request), 0, L4VIRTIO_BLOCK_S_IOERR);
+    }
 
-    virtual int handle_request(Virtio_client *client) = 0;
     cxx::unique_ptr<Request> request;
   };
 
-  struct Pending_inout_request : public Pending_request
+  struct Pending_inout_request : public Generic_pending_request
   {
     Inout_block blocks;
 
-    using Pending_request::Pending_request;
+    using Generic_pending_request::Generic_pending_request;
 
     L4Re::Dma_space::Direction dir() const
     {
@@ -51,19 +63,16 @@ protected:
     }
 
     int handle_request(Virtio_client *client) override
-    {
-      return client->inout_request(this);
-    }
+    { return check_error(client->inout_request(this), client); }
 
   };
 
-  struct Pending_flush_request : public Pending_request
+  struct Pending_flush_request : public Generic_pending_request
   {
-    using Pending_request::Pending_request;
+    using Generic_pending_request::Generic_pending_request;
+
     int handle_request(Virtio_client *client) override
-    {
-      return client->flush_request(this);
-    }
+    { return check_error(client->flush_request(this), client); }
   };
 
 public:
@@ -81,7 +90,8 @@ public:
                                                    dev->is_read_only()
                                                      || readonly),
     _numds(numds),
-    _device(dev)
+    _device(dev),
+    _pending(dev->request_queue())
   {
     reset_client();
   }
@@ -91,7 +101,8 @@ public:
    */
   void reset_device() override
   {
-    drain_pending(false);
+    if (_pending)
+      _pending->drain_queue_for(this, false);
     _device->reset();
     _negotiated_features.raw = 0;
   }
@@ -112,10 +123,10 @@ public:
   }
 
   bool queue_stopped() override
-  { return !_pending.empty(); }
+  { return false; }
 
   bool process_request(cxx::unique_ptr<Request> &&req) override;
-  void task_finished(Pending_request *preq, int error, l4_size_t sz);
+  void task_finished(Generic_pending_request *preq, int error, l4_size_t sz);
 
   /**
    * Process a shutdown event on the client
@@ -147,7 +158,8 @@ public:
 
     if (type != Shutdown_type::Running)
       {
-        drain_pending(type != Client_gone);
+        if (_pending)
+          _pending->drain_queue_for(this, type != Client_gone);
         _device->reset();
       }
   }
@@ -260,30 +272,16 @@ private:
   }
 
 protected:
-  void check_pending();
-  void drain_pending(bool finalize);
-
   template <typename REQ>
-  bool handle_request_error(int error, cxx::unique_ptr<REQ> pending)
+  bool handle_request_result(int error, cxx::unique_ptr<REQ> &&pending)
   {
-    auto trace = Dbg::trace("virtio");
-    if (error == -L4_EBUSY)
+    if (error == -L4_EBUSY && _pending)
       {
-        trace.printf("Port busy, queueing request.\n");
-        _pending.push_back(cxx::unique_ptr<Pending_request>(pending.release()));
-        return false;
-      }
-    else if (error == -L4_ENOSYS)
-      {
-        trace.printf("Unsupported operation.\n");
-        finalize_request(cxx::move(pending->request), 0,
-                         L4VIRTIO_BLOCK_S_UNSUPP);
+        Dbg::trace("virtio").printf("Port busy, queueing request.\n");
+        _pending->add_to_queue(this, cxx::move(cxx::unique_ptr<Pending_request>(pending.release())));
       }
     else if (error < 0)
-      {
-        trace.printf("Got IO error: %d\n", error);
-        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
-      }
+      handle_request_error(error, pending.get());
     else
       // request has been successfully sent to hardware
       // which now has ownership of Request pointer, so release here
@@ -292,11 +290,29 @@ protected:
     return true;
   }
 
+  // only use on errors that are not busy
+  void handle_request_error(int error, Generic_pending_request *pending)
+  {
+    auto trace = Dbg::trace("virtio");
+
+    if (error == -L4_ENOSYS)
+      {
+        trace.printf("Unsupported operation.\n");
+        finalize_request(cxx::move(pending->request), 0,
+                         L4VIRTIO_BLOCK_S_UNSUPP);
+      }
+    else
+      {
+        trace.printf("Got IO error: %d\n", error);
+        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
+      }
+  }
+
 protected:
   unsigned _numds;
   Shutdown_type _shutdown_state;
   cxx::Ref_ptr<Device> _device;
-  cxx::Unique_ptr_list<Pending_request> _pending;
+  Request_queue *_pending;
 
   L4virtio::Svr::Block_features _negotiated_features;
 };
@@ -304,15 +320,16 @@ protected:
 template <typename T>
 class Client_discard_mixin: public T
 {
-  struct Pending_cmd_request : public T::Pending_request
+  struct Pending_cmd_request : public T::Generic_pending_request
   {
     Inout_block blocks;
 
-    using T::Pending_request::Pending_request;
+    using T::Generic_pending_request::Generic_pending_request;
 
     int handle_request(Virtio_client *client) override
     {
-      return static_cast<Client_discard_mixin *>(client)->cmd_request(this);
+      return this->check_error(
+          static_cast<Client_discard_mixin *>(client)->cmd_request(this), client);
     }
   };
 
@@ -466,8 +483,13 @@ class Client_discard_mixin: public T
 
           int ret = build_cmd_blocks(pending.get());
           if (ret >= 0)
-            ret = cmd_request(pending.get());
-          return this->handle_request_error(ret, cxx::move(pending));
+            {
+              if (this->_pending && !this->_pending->empty())
+                ret = -L4_EBUSY; // make sure to keep request order
+              else
+                ret = cmd_request(pending.get());
+            }
+          return this->handle_request_result(ret, cxx::move(pending));
         }
       default:
         return T::process_request(cxx::move(req));
