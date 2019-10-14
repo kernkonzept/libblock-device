@@ -339,7 +339,7 @@ class Client_discard_mixin: public T
     bool discard = (req->header().type == L4VIRTIO_BLOCK_T_DISCARD);
 
     if (this->device_features().ro())
-        return -L4_EIO;
+      return -L4_EIO;
 
     // sector is used only for inout requests, it must be zero for WzD
     if (req->header().sector)
