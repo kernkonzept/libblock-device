@@ -22,13 +22,14 @@ namespace Block_device {
 
 class Virtio_client
 : public L4virtio::Svr::Block_dev_base<Mem_region_info>,
-  public L4::Epiface_t<Virtio_client, L4virtio::Device>
+  public L4::Epiface_t<Virtio_client, L4virtio::Device>,
+  public Pending_request::Owner
 {
 protected:
   class Generic_pending_request : public Pending_request
   {
   protected:
-    int check_error(int result, Virtio_client *client)
+    int check_error(int result)
     {
       if (result < 0 && result != -L4_EBUSY)
         client->handle_request_error(result, this);
@@ -37,16 +38,20 @@ protected:
     }
 
   public:
-    explicit Generic_pending_request(cxx::unique_ptr<Request> &&req)
-    : request(cxx::move(req))
+    explicit Generic_pending_request(Virtio_client *c, cxx::unique_ptr<Request> &&req)
+    : request(cxx::move(req)), client(c)
     {}
 
-    void fail_request(Virtio_client *owner) override
+    void fail_request() override
     {
-      owner->finalize_request(cxx::move(request), 0, L4VIRTIO_BLOCK_S_IOERR);
+      client->finalize_request(cxx::move(request), 0, L4VIRTIO_BLOCK_S_IOERR);
     }
 
+    bool is_owner(Pending_request::Owner *owner) override
+    { return static_cast<Pending_request::Owner *>(client) == owner; }
+
     cxx::unique_ptr<Request> request;
+    Virtio_client *client;
   };
 
   struct Pending_inout_request : public Generic_pending_request
@@ -62,8 +67,8 @@ protected:
              : L4Re::Dma_space::Direction::From_device;
     }
 
-    int handle_request(Virtio_client *client) override
-    { return check_error(client->inout_request(this), client); }
+    int handle_request() override
+    { return check_error(client->inout_request(this)); }
 
   };
 
@@ -71,8 +76,8 @@ protected:
   {
     using Generic_pending_request::Generic_pending_request;
 
-    int handle_request(Virtio_client *client) override
-    { return check_error(client->flush_request(this), client); }
+    int handle_request() override
+    { return check_error(client->flush_request(this)); }
   };
 
 public:
@@ -277,7 +282,7 @@ protected:
     if (error == -L4_EBUSY && _pending)
       {
         Dbg::trace("virtio").printf("Port busy, queueing request.\n");
-        _pending->add_to_queue(this, cxx::move(cxx::unique_ptr<Pending_request>(pending.release())));
+        _pending->add_to_queue(cxx::unique_ptr<Pending_request>(pending.release()));
       }
     else if (error < 0)
       handle_request_error(error, pending.get());
@@ -325,10 +330,10 @@ class Client_discard_mixin: public T
 
     using T::Generic_pending_request::Generic_pending_request;
 
-    int handle_request(Virtio_client *client) override
+    int handle_request() override
     {
       return this->check_error(
-          static_cast<Client_discard_mixin *>(client)->cmd_request(this), client);
+          static_cast<Client_discard_mixin *>(this->client)->cmd_request(this));
     }
   };
 
@@ -478,7 +483,7 @@ class Client_discard_mixin: public T
       case L4VIRTIO_BLOCK_T_WRITE_ZEROES:
       case L4VIRTIO_BLOCK_T_DISCARD:
         {
-          auto pending = cxx::make_unique<Pending_cmd_request>(cxx::move(req));
+          auto pending = cxx::make_unique<Pending_cmd_request>(this, cxx::move(req));
 
           int ret = build_cmd_blocks(pending.get());
           if (ret >= 0)

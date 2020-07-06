@@ -27,7 +27,7 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
     case L4VIRTIO_BLOCK_T_OUT:
     case L4VIRTIO_BLOCK_T_IN:
       {
-        auto pending = cxx::make_unique<Pending_inout_request>(cxx::move(req));
+        auto pending = cxx::make_unique<Pending_inout_request>(this, cxx::move(req));
         int ret = build_inout_blocks(pending.get());
         if (ret >= 0)
           {
@@ -41,7 +41,7 @@ Block_device::Virtio_client::process_request(cxx::unique_ptr<Request> &&req)
       }
     case L4VIRTIO_BLOCK_T_FLUSH:
       {
-        auto pending = cxx::make_unique<Pending_flush_request>(cxx::move(req));
+        auto pending = cxx::make_unique<Pending_flush_request>(this, cxx::move(req));
         int ret = check_flush_request(pending.get());
         if (ret == L4_EOK)
           {
