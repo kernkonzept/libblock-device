@@ -110,7 +110,7 @@ public:
   /**
    * Reinitialize the client.
    */
-  bool reset_client() override
+  void reset_client()
   {
     init_mem_info(_numds);
     set_seg_max(_device->max_segments());
@@ -119,7 +119,6 @@ public:
     set_config_wce(0); // starting in write-through mode
     _shutdown_state = Shutdown_type::Running;
     _negotiated_features.raw = 0;
-    return true;
   }
 
   bool queue_stopped() override
