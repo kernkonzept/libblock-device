@@ -81,6 +81,18 @@ protected:
     { return this->check_error(this->client->flush_request(this)); }
   };
 
+  struct Pending_cmd_request : public Generic_pending_request
+  {
+    Inout_block blocks;
+
+    using Generic_pending_request::Generic_pending_request;
+
+    int handle_request() override
+    {
+      return this->check_error(this->client->discard_cmd_request(this, 0));
+    }
+  };
+
 public:
   using Device_type = DEV;
 
@@ -102,6 +114,7 @@ public:
     _pending(dev->request_queue())
   {
     reset_client();
+    init_discard_info(0);
   }
 
   /**
@@ -174,6 +187,12 @@ public:
                 ret = flush_request(pending.get());
             }
           return handle_request_result(ret, cxx::move(pending));
+        }
+      case L4VIRTIO_BLOCK_T_WRITE_ZEROES:
+      case L4VIRTIO_BLOCK_T_DISCARD:
+        {
+          auto pending = cxx::make_unique<Pending_cmd_request>(this, cxx::move(req));
+          return handle_discard(cxx::move(pending), 0);
         }
       default:
         finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_UNSUPP);
@@ -430,69 +449,40 @@ private:
     return true;
   }
 
-protected:
-  template <typename REQ>
-  bool handle_request_result(int error, cxx::unique_ptr<REQ> &&pending)
-  {
-    if (error == -L4_EBUSY && _pending)
-      {
-        Dbg::trace("virtio").printf("Port busy, queueing request.\n");
-        _pending->add_to_queue(cxx::unique_ptr<Pending_request>(pending.release()));
-      }
-    else if (error < 0)
-      handle_request_error(error, pending.get());
-    else
-      // request has been successfully sent to hardware
-      // which now has ownership of Request pointer, so release here
-      pending.release();
+  template <typename T = Device_type>
+  void init_discard_info(long) {}
 
-    return true;
+  template <typename T = Device_type>
+  auto init_discard_info(int)
+    -> decltype(((T*)0)->discard_info(), void())
+  {
+    _di = _device->discard_info();
+
+    // Convert sector sizes to virtio 512-byte sectors.
+    size_t sps = _device->sector_size() >> 9;
+    if (_di.max_discard_sectors)
+      set_discard(_di.max_discard_sectors * sps, _di.max_discard_seg,
+                     _di.discard_sector_alignment * sps);
+    if (_di.max_write_zeroes_sectors)
+      set_write_zeroes(_di.max_write_zeroes_sectors * sps,
+                          _di.max_write_zeroes_seg, _di.write_zeroes_may_unmap);
   }
 
-  // only use on errors that are not busy
-  void handle_request_error(int error, Generic_pending_request *pending)
+  bool handle_discard(cxx::unique_ptr<Pending_cmd_request> &&pending, int)
   {
-    auto trace = Dbg::trace("virtio");
+    int ret = build_discard_cmd_blocks(pending.get());
+    if (ret >= 0)
+      {
+        if (this->_pending && !this->_pending->empty())
+          ret = -L4_EBUSY; // make sure to keep request order
+        else
+          ret = discard_cmd_request(pending.get(), 0);
+      }
 
-    if (error == -L4_ENOSYS)
-      {
-        trace.printf("Unsupported operation.\n");
-        finalize_request(cxx::move(pending->request), 0,
-                         L4VIRTIO_BLOCK_S_UNSUPP);
-      }
-    else
-      {
-        trace.printf("Got IO error: %d\n", error);
-        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
-      }
+    return this->handle_request_result(ret, cxx::move(pending));
   }
 
-protected:
-  unsigned _numds;
-  Shutdown_type _shutdown_state;
-  cxx::Ref_ptr<Device_type> _device;
-  Request_queue *_pending;
-
-  L4virtio::Svr::Block_features _negotiated_features;
-};
-
-template <typename T>
-class Client_discard_mixin: public T
-{
-  struct Pending_cmd_request : public T::Generic_pending_request
-  {
-    Inout_block blocks;
-
-    using T::Generic_pending_request::Generic_pending_request;
-
-    int handle_request() override
-    {
-      return this->check_error(
-          static_cast<Client_discard_mixin *>(this->client)->cmd_request(this));
-    }
-  };
-
-  int build_cmd_blocks(Pending_cmd_request *preq)
+  int build_discard_cmd_blocks(Pending_cmd_request *preq)
   {
     auto *req = preq->request.get();
     bool discard = (req->header().type == L4VIRTIO_BLOCK_T_DISCARD);
@@ -506,16 +496,16 @@ class Client_discard_mixin: public T
 
     if (discard)
       {
-        if (!T::negotiated_features().discard())
+        if (!negotiated_features().discard())
           return -L4_ENOSYS;
       }
     else
       {
-        if (!T::negotiated_features().write_zeroes())
+        if (!negotiated_features().write_zeroes())
           return -L4_ENOSYS;
       }
 
-    auto *d = static_cast<Device_discard_mixin<Device> *>(T::_device.get());
+    auto *d = _device.get();
 
     size_t seg = 0;
     size_t max_seg = discard ? _di.max_discard_seg : _di.max_write_zeroes_seg;
@@ -527,7 +517,7 @@ class Client_discard_mixin: public T
 
     while (req->has_more())
       {
-        typename T::Request::Data_block b;
+        Request::Data_block b;
 
         try
           {
@@ -609,74 +599,68 @@ class Client_discard_mixin: public T
     return L4_EOK;
   }
 
-  int cmd_request(Pending_cmd_request *preq)
+  template <typename T = Device_type>
+  int discard_cmd_request(Pending_cmd_request *, long)
+  { return -L4_EIO; }
+
+  template <typename T = Device_type>
+  auto discard_cmd_request(Pending_cmd_request *preq, int)
+    -> decltype(((T*)0)->discard_info(), int())
   {
     auto *req = preq->request.get();
     bool discard = (req->header().type == L4VIRTIO_BLOCK_T_DISCARD);
 
-    return static_cast<Device_discard_mixin<Device> *>(T::_device.get())
-      ->discard(0, preq->blocks,
+    return _device->discard(0, preq->blocks,
                 [this, preq](int error, l4_size_t sz) {
-                  T::task_finished(preq, error, sz);
+                  task_finished(preq, error, sz);
                 },
                 discard);
   }
 
-  bool process_request(cxx::unique_ptr<typename T::Request> &&req) override
+  template <typename REQ>
+  bool handle_request_result(int error, cxx::unique_ptr<REQ> &&pending)
   {
-    auto trace = Dbg::trace("virtio");
-
-    if (this->_shutdown_state != Shutdown_type::Running)
+    if (error == -L4_EBUSY && _pending)
       {
-        trace.printf("Failing requests as the client is shutting down\n");
-        this->finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_IOERR);
-        return false;
+        Dbg::trace("virtio").printf("Port busy, queueing request.\n");
+        _pending->add_to_queue(cxx::unique_ptr<Pending_request>(pending.release()));
       }
-
-    switch (req->header().type)
-      {
-      case L4VIRTIO_BLOCK_T_WRITE_ZEROES:
-      case L4VIRTIO_BLOCK_T_DISCARD:
-        {
-          auto pending = cxx::make_unique<Pending_cmd_request>(this, cxx::move(req));
-
-          int ret = build_cmd_blocks(pending.get());
-          if (ret >= 0)
-            {
-              if (this->_pending && !this->_pending->empty())
-                ret = -L4_EBUSY; // make sure to keep request order
-              else
-                ret = cmd_request(pending.get());
-            }
-          return this->handle_request_result(ret, cxx::move(pending));
-        }
-      default:
-        return T::process_request(cxx::move(req));
-      }
+    else if (error < 0)
+      handle_request_error(error, pending.get());
+    else
+      // request has been successfully sent to hardware
+      // which now has ownership of Request pointer, so release here
+      pending.release();
 
     return true;
   }
 
-public:
-  template <typename... Args>
-  Client_discard_mixin(cxx::Ref_ptr<Device> const &dev, Args &&... args)
-  : T(dev, cxx::forward<Args>(args)...)
+  // only use on errors that are not busy
+  void handle_request_error(int error, Generic_pending_request *pending)
   {
-    auto *d = static_cast<Device_discard_mixin<Device> *>(dev.get());
-    _di = d->discard_info();
+    auto trace = Dbg::trace("virtio");
 
-    // Convert sector sizes to virtio 512-byte sectors.
-    size_t sps = d->sector_size() >> 9;
-    if (_di.max_discard_sectors)
-      T::set_discard(_di.max_discard_sectors * sps, _di.max_discard_seg,
-                     _di.discard_sector_alignment * sps);
-    if (_di.max_write_zeroes_sectors)
-      T::set_write_zeroes(_di.max_write_zeroes_sectors * sps,
-                          _di.max_write_zeroes_seg, _di.write_zeroes_may_unmap);
+    if (error == -L4_ENOSYS)
+      {
+        trace.printf("Unsupported operation.\n");
+        finalize_request(cxx::move(pending->request), 0,
+                         L4VIRTIO_BLOCK_S_UNSUPP);
+      }
+    else
+      {
+        trace.printf("Got IO error: %d\n", error);
+        finalize_request(cxx::move(pending->request), 0, L4VIRTIO_BLOCK_S_IOERR);
+      }
   }
 
-private:
-  Device_discard_mixin<Device>::Discard_info _di;
+protected:
+  unsigned _numds;
+  Shutdown_type _shutdown_state;
+  cxx::Ref_ptr<Device_type> _device;
+  Request_queue *_pending;
+  Device_discard_feature::Discard_info _di;
+
+  L4virtio::Svr::Block_features _negotiated_features;
 };
 
 } //name space

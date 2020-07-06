@@ -39,9 +39,10 @@ struct Simple_factory
   { return cxx::make_unique<Client_type>(dev, numds, readonly); }
 };
 
+template <typename BASE_DEV>
 struct Partitionable_factory
 {
-  using Device_type = Device;
+  using Device_type = BASE_DEV;
   using Client_type = Virtio_client<Device_type>;
 
   static cxx::unique_ptr<Client_type>
@@ -55,7 +56,8 @@ struct Partitionable_factory
   create_partition(cxx::Ref_ptr<Device_type> const &dev, unsigned partition_id,
                    Partition_info const &pi)
   {
-    return cxx::Ref_ptr<Device_type>(new Partitioned_device(dev, partition_id, pi));
+    return cxx::Ref_ptr<Device_type>(
+        new Partitioned_device<Device_type>(dev, partition_id, pi));
   }
 };
 

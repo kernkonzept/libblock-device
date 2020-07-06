@@ -94,7 +94,8 @@ struct Device : public cxx::Ref_obj
 
 inline Device::~Device() = default;
 
-class Base_device : public Device
+template <typename DEV>
+class Device_with_request_queue : public DEV
 {
 public:
   Request_queue *request_queue() override
@@ -104,11 +105,11 @@ private:
   Simple_request_queue _request_queue;
 };
 
-template <typename T>
-struct Device_discard_mixin: public T
+/**
+ * Partial interface for devices that offer discard functionality.
+ */
+struct Device_discard_feature
 {
-  using T::T;
-
   struct Discard_info
   {
     unsigned max_discard_sectors = 0;
@@ -125,6 +126,9 @@ struct Device_discard_mixin: public T
   virtual int discard(l4_uint64_t offset,
                       Block_device::Inout_block const &blocks,
                       Block_device::Inout_callback const &cb, bool discard) = 0;
+
+protected:
+  ~Device_discard_feature() = default;
 };
 
 } // name space

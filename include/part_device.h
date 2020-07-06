@@ -14,10 +14,84 @@
 
 namespace Block_device {
 
-class Partitioned_device : public Device
+namespace Impl {
+
+  /**
+   * Dummy class used when the device class is not derived from
+   * Device_discard_feature.
+   */
+  template <typename PART_DEV, typename BASE_DEV,
+            bool = std::is_base_of<Device_discard_feature, BASE_DEV>::value>
+  class Partitioned_device_discard_mixin : public BASE_DEV {};
+
+  /**
+   * Mixin implementing discard for partition devices.
+   *
+   * \tparam PART_DEV  Class of the partition device
+   * \taparm BASE_DEV  Class implementing the Device interface.
+   */
+  template <typename PART_DEV, typename BASE_DEV>
+  class Partitioned_device_discard_mixin<PART_DEV, BASE_DEV, true>
+  : public BASE_DEV
+  {
+    using Base = BASE_DEV;
+    using Part_device = PART_DEV;
+
+  public:
+    typename Base::Discard_info discard_info() const override
+    {
+      return dev()->parent()->discard_info();
+    }
+
+    int discard(l4_uint64_t offset, Inout_block const &blocks,
+                Inout_callback const &cb, bool discard) override
+    {
+      auto sz = dev()->partition_size();
+
+      if (offset > sz)
+        return -L4_EINVAL;
+
+      Inout_block const *cur = &blocks;
+      while (cur)
+        {
+          if (cur->sector >= sz - offset)
+            return -L4_EINVAL;
+          if (cur->num_sectors > sz)
+            return -L4_EINVAL;
+          if (offset + cur->sector > sz - cur->num_sectors)
+            return -L4_EINVAL;
+
+          cur = cur->next.get();
+        }
+
+      auto start = offset + dev()->partition_start();
+      Dbg::trace("partition")
+        .printf("Starting sector on disk: 0x%llx\n", start);
+      return dev()->parent()->discard(start, blocks, cb, discard);
+    }
+
+  private:
+    Part_device const *dev() const
+    { return static_cast<Part_device const *>(this); }
+  };
+
+}
+
+/**
+ * A partition device for the given device interface.
+ *
+ * \tparam  BASE_DEV  Class defining the device interface.
+ *                    Attention: this is not the class implementing the
+ *                    device iteself.
+ */
+template <typename BASE_DEV = Device>
+class Partitioned_device
+: public Impl::Partitioned_device_discard_mixin<Partitioned_device<BASE_DEV>, BASE_DEV>
 {
 public:
-  Partitioned_device(cxx::Ref_ptr<Device> const &dev,
+  using Device_type = BASE_DEV;
+
+  Partitioned_device(cxx::Ref_ptr<Device_type> const &dev,
                      unsigned partition_id, Partition_info const &pi)
   : _parent(dev),
     _start(pi.first),
@@ -112,54 +186,22 @@ public:
   void start_device_scan(Block_device::Errand::Callback const &callback) override
   { callback(); }
 
+  l4_uint64_t partition_size() const
+  { return _size; }
+
+  l4_uint64_t partition_start() const
+  { return _start; }
+
+  Device_type *parent() const
+  { return _parent.get(); }
+
+
 private:
   char _guid[37];
   char _partition_id[4];
-
-protected:
-  cxx::Ref_ptr<Device> _parent;
+  cxx::Ref_ptr<Device_type> _parent;
   l4_uint64_t _start;
   l4_uint64_t _size;
-};
-
-template <typename T>
-class Partitioned_device_discard_mixin : public Device_discard_mixin<T>
-{
-  using Base = Device_discard_mixin<T>;
-
-  Base *get_parent() const { return static_cast<Base *>(Base::_parent.get()); }
-
-public:
-  using Base::Device_discard_mixin;
-
-  typename Base::Discard_info discard_info() const override
-  {
-    return get_parent()->discard_info();
-  }
-
-  int discard(l4_uint64_t offset, Inout_block const &blocks,
-              Inout_callback const &cb, bool discard) override
-  {
-    if (offset > Base::_size)
-      return -L4_EINVAL;
-
-    Inout_block const *cur = &blocks;
-    while (cur)
-      {
-        if (cur->sector >= Base::_size - offset)
-          return -L4_EINVAL;
-        if (cur->num_sectors > Base::_size)
-          return -L4_EINVAL;
-        if (offset + cur->sector > Base::_size - cur->num_sectors)
-          return -L4_EINVAL;
-
-        cur = cur->next.get();
-      }
-
-    Dbg::trace("partition")
-      .printf("Starting sector on disk: 0x%llx\n", offset + Base::_start);
-    return get_parent()->discard(offset + Base::_start, blocks, cb, discard);
-  }
 };
 
 } // name space
