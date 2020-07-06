@@ -32,8 +32,6 @@ struct Device : public cxx::Ref_obj
   virtual l4_size_t sector_size() const = 0;
   /// Returns the number of segments allowed for scatter-gather-operations.
   virtual unsigned max_segments() const = 0;
-  /// Returns the maximum number of requests the device can handle in parallel.
-  virtual unsigned max_in_flight() const = 0;
 
   /**
    * Return the device-global device queue.

@@ -138,9 +138,6 @@ public:
   unsigned max_segments() const override
   { return _parent->max_segments(); }
 
-  unsigned max_in_flight() const override
-  { return _parent->max_in_flight(); }
-
   Request_queue *request_queue() override
   { return _parent->request_queue(); }
 
