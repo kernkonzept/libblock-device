@@ -20,7 +20,6 @@
 #include <l4/sys/cxx/ipc_epiface>
 
 #include <l4/libblock-device/debug.h>
-#include <l4/libblock-device/device.h>
 #include <l4/libblock-device/errand.h>
 #include <l4/libblock-device/partition.h>
 #include <l4/libblock-device/part_device.h>
@@ -28,10 +27,11 @@
 
 namespace Block_device {
 
+template <typename DEV>
 struct Simple_factory
 {
-  using Device_type = Device;
-  using Client_type = Virtio_client;
+  using Device_type = DEV;
+  using Client_type = Virtio_client<Device_type>;
 
   static cxx::unique_ptr<Client_type>
   create_client(cxx::Ref_ptr<Device_type> const &dev, unsigned numds, bool readonly)
@@ -48,17 +48,19 @@ struct Simple_factory
 /**
  * Basic class that scans devices and handles client connections.
  *
+ * \tparam DEV      Base class for all devices.
  * \tparam FACTORY  Class that creates clients and partitions. See
  *                  Simple_factory for an example of the required interface.
  *
  */
-template <typename FACTORY = Simple_factory>
+template <typename DEV, typename FACTORY = Simple_factory<DEV>>
 class Device_mgr
 {
   using Device_factory_type = FACTORY;
   using Client_type = typename Device_factory_type::Client_type;
+  using Device_type = typename Device_factory_type::Device_type;
 
-  using Pairing_callback = std::function<void(Device *)>;
+  using Pairing_callback = std::function<void(Device_type *)>;
 
   /**
    * A client that is waiting for a device (yet) unknown to the manager.
@@ -88,7 +90,7 @@ class Device_mgr
   class Connection : public cxx::Ref_obj_list_item<Connection>
   {
   public:
-    explicit Connection(cxx::Ref_ptr<Device> &&dev)
+    explicit Connection(cxx::Ref_ptr<Device_type> &&dev)
     : _shutdown_state(Shutdown_type::Running),
       _device(cxx::move(dev))
     {}
@@ -101,7 +103,7 @@ class Device_mgr
       _device->start_device_scan(
         [=]()
           {
-            auto reader = cxx::make_ref_obj<Partition_reader>(_device.get());
+            auto reader = cxx::make_ref_obj<Partition_reader<Device_type>>(_device.get());
             reader->read(
               [=]()
                 {
@@ -206,7 +208,7 @@ class Device_mgr
      *
      * For more information of partition devices, see Partitioned_device.
      */
-    void add_partitions(Partition_reader const &reader)
+    void add_partitions(Partition_reader<Device_type> const &reader)
     {
       l4_size_t sz = reader.table_size();
 
@@ -252,7 +254,7 @@ class Device_mgr
     /// Current shutdown state
     Shutdown_type _shutdown_state;
     /// The device itself.
-    cxx::Ref_ptr<Device> _device;
+    cxx::Ref_ptr<Device_type> _device;
     /// Client interface.
     cxx::unique_ptr<Client_type> _interface;
     /// Partitions of the device.
@@ -346,7 +348,7 @@ public:
       c->check_clients(_registry);
   }
 
-  void add_disk(cxx::Ref_ptr<Device> &&device, Errand::Callback const &callback)
+  void add_disk(cxx::Ref_ptr<Device_type> &&device, Errand::Callback const &callback)
   {
     auto conn = cxx::make_ref_obj<Connection>(std::move(device));
 

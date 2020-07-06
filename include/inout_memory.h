@@ -14,7 +14,6 @@
 #include <l4/re/dma_space>
 #include <l4/cxx/ref_ptr>
 
-#include <l4/libblock-device/device.h>
 #include <l4/libblock-device/types.h>
 
 namespace Block_device {
@@ -23,11 +22,14 @@ namespace Block_device {
  *  Helper class that temporarily allocates memory that can be used
  *  for in/out operations with the device.
  */
+template <typename DEV>
 class Inout_memory : public cxx::Ref_obj
 {
 public:
+  using Device_type = DEV;
+
   Inout_memory() : _paddr(0) {}
-  Inout_memory(l4_uint32_t num_sectors, Device *dev,
+  Inout_memory(l4_uint32_t num_sectors, Device_type *dev,
                L4Re::Dma_space::Direction dir)
   : _device(dev), _paddr(0), _dir(dir), _num_sectors(num_sectors)
   {
@@ -103,7 +105,7 @@ public:
   { return reinterpret_cast<T *>(_region.get() + offset); }
 
 private:
-  Device *_device;
+  Device_type *_device;
   cxx::unique_ptr<Block_device::Mem_region> _mem_region;
   L4Re::Rm::Unique_region<char *> _region;
   L4Re::Dma_space::Dma_addr _paddr;
