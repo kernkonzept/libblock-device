@@ -24,20 +24,39 @@
 #include <l4/libblock-device/errand.h>
 #include <l4/libblock-device/partition.h>
 #include <l4/libblock-device/part_device.h>
+#include <l4/libblock-device/virtio_client.h>
 
 namespace Block_device {
+
+struct Simple_factory
+{
+  using Device_type = Device;
+  using Client_type = Virtio_client;
+
+  static cxx::unique_ptr<Client_type>
+  create_client(cxx::Ref_ptr<Device_type> const &dev, unsigned numds, bool readonly)
+  { return cxx::make_unique<Client_type>(dev, numds, readonly); }
+
+  static cxx::Ref_ptr<Device_type>
+  create_partition(cxx::Ref_ptr<Device_type> const &dev, unsigned partition_id, Partition_info const &pi)
+  {
+    return cxx::Ref_ptr<Device_type>(new Partitioned_device(dev, partition_id, pi));
+  }
+};
+
 
 /**
  * Basic class that scans devices and handles client connections.
  *
- * \tparam IF Class that will handle the client.
- * \tparam PD Class that will implement the partition device.
+ * \tparam FACTORY  Class that creates clients and partitions. See
+ *                  Simple_factory for an example of the required interface.
+ *
  */
-template <typename IF, typename PD = Partitioned_device>
+template <typename FACTORY = Simple_factory>
 class Device_mgr
 {
-  using Client_type = IF;
-  using Partition_type = PD;
+  using Device_factory_type = FACTORY;
+  using Client_type = typename Device_factory_type::Client_type;
 
   using Pairing_callback = std::function<void(Device *)>;
 
@@ -129,7 +148,8 @@ class Device_mgr
       if (busy)
         return -L4_EBUSY;
 
-      auto clt = cxx::make_unique<Client_type>(_device, c->num_ds, c->readonly);
+      auto clt = Device_factory_type::create_client(_device, c->num_ds,
+                                                    c->readonly);
 
       if (c->gate.is_valid())
         {
@@ -196,8 +216,8 @@ class Device_mgr
           if (reader.get_partition(i, &info) < 0)
             continue;
 
-          Device *pdev = new Partition_type(_device, i, info);
-          auto conn = cxx::make_ref_obj<Connection>(cxx::Ref_ptr<Device>(pdev));
+          auto conn = cxx::make_ref_obj<Connection>(
+            Device_factory_type::create_partition(_device, i, info));
           _subs.push_front(std::move(conn));
         }
     }
