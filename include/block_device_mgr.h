@@ -34,11 +34,26 @@ struct Simple_factory
   using Client_type = Virtio_client<Device_type>;
 
   static cxx::unique_ptr<Client_type>
-  create_client(cxx::Ref_ptr<Device_type> const &dev, unsigned numds, bool readonly)
+  create_client(cxx::Ref_ptr<Device_type> const &dev,
+                unsigned numds, bool readonly)
   { return cxx::make_unique<Client_type>(dev, numds, readonly); }
+};
+
+struct Partitionable_factory
+{
+  using Device_type = Device;
+  using Client_type = Virtio_client<Device_type>;
+
+  static cxx::unique_ptr<Client_type>
+  create_client(cxx::Ref_ptr<Device_type> const &dev,
+                unsigned numds, bool readonly)
+  {
+    return cxx::make_unique<Client_type>(dev, numds, readonly);
+  }
 
   static cxx::Ref_ptr<Device_type>
-  create_partition(cxx::Ref_ptr<Device_type> const &dev, unsigned partition_id, Partition_info const &pi)
+  create_partition(cxx::Ref_ptr<Device_type> const &dev, unsigned partition_id,
+                   Partition_info const &pi)
   {
     return cxx::Ref_ptr<Device_type>(new Partitioned_device(dev, partition_id, pi));
   }
@@ -103,13 +118,7 @@ class Device_mgr
       _device->start_device_scan(
         [=]()
           {
-            auto reader = cxx::make_ref_obj<Partition_reader<Device_type>>(_device.get());
-            reader->read(
-              [=]()
-                {
-                  add_partitions(*reader.get());
-                  callback();
-                });
+            scan_disk_partitions(callback, 0);
           });
     }
 
@@ -202,27 +211,51 @@ class Device_mgr
 
   private:
     /**
-     * Create sub devices from a partition list.
+     * Scan the device for sub partitions.
      *
-     * \param reader  Partition reader to read the partition info from.
+     * \param callback  Function to call when the scanning is done.
+     * \param int       Dummy parameter to ensure template deduction prefers
+     *                  this function. (Always set to '0' when calling
+     *                  this function.)
      *
-     * For more information of partition devices, see Partitioned_device.
+     * This function is compiled in when the device factory has a function
+     * create_partition() defined.
      */
-    void add_partitions(Partition_reader<Device_type> const &reader)
+    template <typename T = Device_factory_type>
+    auto scan_disk_partitions(Errand::Callback const &callback, int)
+     -> decltype((T::create_partition)(cxx::Ref_ptr<Device_type>(), 0, Partition_info()), void())
     {
-      l4_size_t sz = reader.table_size();
+      auto reader = cxx::make_ref_obj<Partition_reader<Device_type>>(_device.get());
+      reader->read(
+        [=]()
+          {
+            l4_size_t sz = reader->table_size();
 
-      for (l4_size_t i = 1; i <= sz; ++i)
-        {
-          Partition_info info;
-          if (reader.get_partition(i, &info) < 0)
-            continue;
+            for (l4_size_t i = 1; i <= sz; ++i)
+            {
+              Partition_info info;
+              if (reader->get_partition(i, &info) < 0)
+                continue;
 
-          auto conn = cxx::make_ref_obj<Connection>(
-            Device_factory_type::create_partition(_device, i, info));
-          _subs.push_front(std::move(conn));
-        }
+              auto conn = cxx::make_ref_obj<Connection>(
+                Device_factory_type::create_partition(_device, i, info));
+              _subs.push_front(std::move(conn));
+            }
+
+            callback();
+          });
     }
+
+    /**
+     * Dummy scan function for devices without partition.
+     *
+     * When the device factory does not have a function to create partitions,
+     * then this function is compiled in and the partition scanning is
+     * skipped completely.
+     */
+    template <typename T = Device_factory_type>
+    void scan_disk_partitions(Errand::Callback const &callback, long)
+    { callback(); }
 
     /**
      * Disconnect the existing client.
