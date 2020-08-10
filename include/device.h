@@ -30,6 +30,8 @@ struct Device : public cxx::Ref_obj
   virtual l4_uint64_t capacity() const = 0;
   /// Returns the size of physical hardware sectors.
   virtual l4_size_t sector_size() const = 0;
+  /// Returns the maximum size of one segment.
+  virtual l4_size_t max_size() const = 0;
   /// Returns the number of segments allowed for scatter-gather-operations.
   virtual unsigned max_segments() const = 0;
 

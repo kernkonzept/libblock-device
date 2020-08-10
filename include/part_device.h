@@ -135,6 +135,9 @@ public:
   l4_size_t sector_size() const override
   { return _parent->sector_size(); }
 
+  l4_size_t max_size() const override
+  { return _parent->max_size(); }
+
   unsigned max_segments() const override
   { return _parent->max_segments(); }
 

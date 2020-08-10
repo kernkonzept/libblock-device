@@ -135,7 +135,7 @@ public:
   {
     init_mem_info(_numds);
     set_seg_max(_device->max_segments());
-    set_size_max(0x400000); // 4MB XXX???
+    set_size_max(_device->max_size());
     set_flush();
     set_config_wce(0); // starting in write-through mode
     _shutdown_state = Shutdown_type::Running;
