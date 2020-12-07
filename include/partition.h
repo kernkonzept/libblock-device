@@ -20,6 +20,8 @@
 #include <l4/libblock-device/inout_memory.h>
 #include <l4/libblock-device/gpt.h>
 
+#include <l4/sys/cache.h>
+
 namespace Block_device {
 
 /**
@@ -201,11 +203,21 @@ private:
     using namespace std::placeholders;
     auto next = std::bind(func, this, _1, _2);
 
+    l4_addr_t vstart = (l4_addr_t)_db.virt_addr;
+    l4_addr_t vend   = vstart + _db.num_sectors * _dev->sector_size();
+    l4_cache_inv_data(vstart, vend);
+
     Errand::poll(10, 10000,
                  [=]()
                    {
-                     int ret = _dev->inout_data(sector, _db, next,
-                                                L4Re::Dma_space::Direction::From_device);
+                     int ret = _dev->inout_data(
+                                 sector, _db,
+                                 [next, vstart, vend](int error, l4_size_t size)
+                                   {
+                                     l4_cache_inv_data(vstart, vend);
+                                     next(error, size);
+                                   },
+                                   L4Re::Dma_space::Direction::From_device);
                      if (ret < 0 && ret != -L4_EBUSY)
                        invoke_callback();
                      return ret != -L4_EBUSY;

@@ -10,6 +10,7 @@
 #include <l4/cxx/ref_ptr>
 #include <l4/cxx/unique_ptr_list>
 #include <l4/cxx/utils>
+#include <l4/sys/cache.h>
 
 #include <l4/sys/task>
 
@@ -426,14 +427,48 @@ private:
     return L4_EOK;
   }
 
+  void maintain_cache_before_req(Pending_inout_request const *preq)
+  {
+    for (Inout_block const *cur = &preq->blocks; cur; cur = cur->next.get())
+      {
+        l4_addr_t vstart = (l4_addr_t)cur->virt_addr;
+        if (vstart)
+          {
+            l4_size_t vsize = cur->num_sectors * _device->sector_size();
+            if (preq->dir() == L4Re::Dma_space::From_device)
+              l4_cache_inv_data(vstart, vstart + vsize);
+            else if (preq->dir() == L4Re::Dma_space::To_device)
+              l4_cache_clean_data(vstart, vstart + vsize);
+            else // L4Re::Dma_space::Bidirectional
+              l4_cache_flush_data(vstart, vstart + vsize);
+          }
+      }
+  }
+
+  void maintain_cache_after_req(Pending_inout_request const *preq)
+  {
+    for (Inout_block const *cur = &preq->blocks; cur; cur = cur->next.get())
+      {
+        l4_addr_t vstart = (l4_addr_t)cur->virt_addr;
+        if (vstart)
+          {
+            l4_size_t vsize = cur->num_sectors * _device->sector_size();
+            if (preq->dir() != L4Re::Dma_space::To_device)
+              l4_cache_inv_data(vstart, vstart + vsize);
+          }
+      }
+  }
+
   int inout_request(Pending_inout_request *preq)
   {
     auto *req = preq->request.get();
     l4_uint64_t sector = req->header().sector / (_device->sector_size() >> 9);
 
+    maintain_cache_before_req(preq);
     return _device->inout_data(sector, preq->blocks,
                                [this, preq](int error, l4_size_t sz) {
                                  release_dma(preq);
+                                 maintain_cache_after_req(preq);
                                  task_finished(preq, error, sz);
                                },
                                preq->dir());
