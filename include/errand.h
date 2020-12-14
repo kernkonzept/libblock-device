@@ -128,12 +128,12 @@ public:
       }
   }
 
-  void reschedule(unsigned ms = 0)
+  void reschedule(unsigned interval = 0)
   {
     // create a placeholder reference pointer for the timeout queue
     cxx::Ref_ptr<Errand> p(this);
 
-    _sif->add_timeout(p.release(), l4_kip_clock(l4re_kip()) + ms);
+    _sif->add_timeout(p.release(), l4_kip_clock(l4re_kip()) + interval);
   }
 
   // Class can only be instantiated as a reference counting object.
@@ -167,24 +167,25 @@ inline void set_server_iface(L4::Ipc_svr::Server_iface *sif) { _sif = sif; }
  * Schedule a function for later execution.
  *
  * \param callback  Function to execute.
- * \param ms        Minimum interval to wait before the function runs
- *                  (in micro seconds).
+ * \param interval  Minimum interval to wait before the function runs
+ *                  (in microseconds, the unit of the KIP clock).
  *
  * The function will be enqueued in the timeout queue of the main server loop.
  *
  */
-inline void schedule(Callback const &callback, int ms)
+inline void schedule(Callback const &callback, int interval)
 {
-  cxx::make_ref_obj<Errand>(callback)->reschedule(ms);
+  cxx::make_ref_obj<Errand>(callback)->reschedule(interval);
 }
 
 /**
  * Repeatedly execute a function.
  *
  * \param retries   Maximum number of times the poll function will be executed.
- * \param interval  Minimum sleep time between runs of the poll function.
- *                  The function will be requeued with the given interval
- *                  after it has finished a single execution round.
+ * \param interval  Minimum sleep time in microseconds (unit of the KIP clock)
+ *                  between runs of the poll function. The function will be
+ *                  requeued with the given interval after it has finished a
+ *                  single execution round.
  * \param poll_func Polling function, see below.
  * \param callback  Function called after polling has finished, see below.
  *
