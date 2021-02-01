@@ -115,15 +115,17 @@ private:
     unsigned secsz = _dev->sector_size();
     auto *header = _header.template get<Gpt::Header const>(secsz);
 
+    auto info = Dbg::info();
+    auto trace = Dbg::trace();
+
     if (strncmp(header->signature, "EFI PART", 8) != 0)
       {
+        info.printf("No GUID partition header found.\n");
         _callback();
         return;
       }
 
     // XXX check CRC32 of header
-    auto info = Dbg::info();
-    auto trace = Dbg::trace();
 
     info.printf("GUID partition header found with up to %d partitions.\n",
                 header->partition_array_size);
