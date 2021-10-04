@@ -496,12 +496,12 @@ private:
 
     if (discard)
       {
-        if (!negotiated_features().discard())
+        if (!_negotiated_features.discard())
           return -L4_ENOSYS;
       }
     else
       {
-        if (!negotiated_features().write_zeroes())
+        if (!_negotiated_features.write_zeroes())
           return -L4_ENOSYS;
       }
 
