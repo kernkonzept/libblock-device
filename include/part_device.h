@@ -107,8 +107,8 @@ public:
 
     snprintf(_partition_id, sizeof(_partition_id), "%d", partition_id);
 
-    strncpy(_guid, pi.guid, sizeof(_guid));
-    _guid[sizeof(_guid) - 1] = 0;
+    static_assert(sizeof(_guid) == sizeof(pi.guid), "String size mismatch");
+    memcpy(_guid, pi.guid, sizeof(_guid));
   }
 
   bool is_read_only() const override
