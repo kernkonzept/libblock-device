@@ -633,22 +633,6 @@ private:
             if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_RESERVED)
               return -L4_ENOSYS;
 
-            if (discard)
-              {
-                if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP)
-                  return -L4_ENOSYS;
-                if (p.num_sectors > _di.max_discard_sectors)
-                  return -L4_EIO;
-              }
-            else
-              {
-                if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP
-                    && !_di.write_zeroes_may_unmap)
-                  return -L4_ENOSYS;
-                if (p.num_sectors > _di.max_write_zeroes_sectors)
-                  return -L4_EIO;
-              }
-
             Inout_block *blk;
             if (last_blk)
               {
@@ -660,8 +644,22 @@ private:
 
             blk->sector = p.sector;
             blk->num_sectors = p.num_sectors;
-            if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP)
-              blk->flags = Inout_f_unmap;
+
+            if (discard)
+              {
+                if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP)
+                  return -L4_ENOSYS;
+                if (p.num_sectors > _di.max_discard_sectors)
+                  return -L4_EIO;
+              }
+            else
+              {
+                if (p.flags & L4VIRTIO_BLOCK_DISCARD_F_UNMAP
+                    && _di.write_zeroes_may_unmap)
+                  blk->flags = Inout_f_unmap;
+                if (p.num_sectors > _di.max_write_zeroes_sectors)
+                  return -L4_EIO;
+              }
 
             last_blk = blk;
           }
