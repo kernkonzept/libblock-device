@@ -234,15 +234,15 @@ class Device_mgr
             l4_size_t sz = reader->table_size();
 
             for (l4_size_t i = 1; i <= sz; ++i)
-            {
-              Partition_info info;
-              if (reader->get_partition(i, &info) < 0)
-                continue;
+              {
+                Partition_info info;
+                if (reader->get_partition(i, &info) < 0)
+                  continue;
 
-              auto conn = cxx::make_ref_obj<Connection>(
-                Device_factory_type::create_partition(_device, i, info));
-              _subs.push_front(std::move(conn));
-            }
+                auto conn = cxx::make_ref_obj<Connection>(
+                  Device_factory_type::create_partition(_device, i, info));
+                _subs.push_front(std::move(conn));
+              }
 
             callback();
           });
