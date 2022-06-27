@@ -1,6 +1,7 @@
 /*
- * Copyright (C) 2018 Kernkonzept GmbH.
+ * Copyright (C) 2018, 2022 Kernkonzept GmbH.
  * Author(s): Sarah Hoffmann <sarah.hoffmann@kernkonzept.com>
+ *            Manuel von Oltersdorff-Kalettka <manuel.kalettka@kernkonzept.com>
  *
  * This file is distributed under the terms of the GNU General Public
  * License, version 2.  Please see the COPYING-GPL-2 file for details.
@@ -77,6 +78,8 @@ class Device_mgr
   using Client_type = typename Device_factory_type::Client_type;
   using Device_type = typename Device_factory_type::Device_type;
 
+  using Ds_vector = std::vector<L4::Cap<L4Re::Dataspace>>;
+
   using Pairing_callback = std::function<void(Device_type *)>;
 
   /**
@@ -93,14 +96,22 @@ class Device_mgr
     /** Read-only access for the client. */
     bool readonly;
 
+    bool enable_trusted_ds_validation;
+
+    std::shared_ptr<Ds_vector const> trusted_dataspaces;
+
     /** Callback to be called when a client is paired with a device. */
     Pairing_callback pairing_cb;
 
     Pending_client() = default;
 
     Pending_client(L4::Cap<L4::Rcv_endpoint> g, std::string const &dev, int ds,
-                   bool ro, Pairing_callback cb)
-    : device_id(dev), gate(g), num_ds(ds), readonly(ro), pairing_cb(cb)
+                   bool ro, bool enable_trusted_ds_validation,
+                   std::shared_ptr<Ds_vector const> trusted_dataspaces,
+                   Pairing_callback cb)
+    : device_id(dev), gate(g), num_ds(ds), readonly(ro),
+      enable_trusted_ds_validation(enable_trusted_ds_validation),
+      trusted_dataspaces(trusted_dataspaces), pairing_cb(cb)
     {}
   };
 
@@ -163,6 +174,10 @@ class Device_mgr
 
       auto clt = Device_factory_type::create_client(_device, c->num_ds,
                                                     c->readonly);
+
+      clt->add_trusted_dataspaces(c->trusted_dataspaces);
+      if (c->enable_trusted_ds_validation)
+        clt->enable_trusted_ds_validation();
 
       if (c->gate.is_valid())
         {
@@ -309,7 +324,10 @@ public:
 
   int add_static_client(L4::Cap<L4::Rcv_endpoint> client, const char *device,
                         int partno, int num_ds, bool readonly = false,
-                        Pairing_callback cb = nullptr)
+                        Pairing_callback cb = nullptr,
+                        bool enable_trusted_ds_validation = false,
+                        std::shared_ptr<Ds_vector const> trusted_dataspaces
+                          = nullptr)
   {
     char _buf[30];
     const char *buf;
@@ -330,14 +348,19 @@ public:
     else
       buf = device;
 
-    _pending_clients.emplace_back(client, buf, num_ds, readonly, cb);
+    _pending_clients.emplace_back(client, buf, num_ds, readonly,
+                                  enable_trusted_ds_validation,
+                                  trusted_dataspaces, cb);
 
     return L4_EOK;
   }
 
   int create_dynamic_client(std::string const &device, int partno, int num_ds,
                             L4::Cap<void> *cap, bool readonly = false,
-                            Pairing_callback cb = nullptr)
+                            Pairing_callback cb = nullptr,
+                            bool enable_trusted_ds_validation = false,
+                            std::shared_ptr<Ds_vector const> trusted_dataspaces
+                              = nullptr)
   {
     Pending_client clt;
 
@@ -349,6 +372,10 @@ public:
     clt.device_id = device;
 
     clt.pairing_cb = cb;
+
+    clt.trusted_dataspaces = trusted_dataspaces;
+
+    clt.enable_trusted_ds_validation = enable_trusted_ds_validation;
 
     if (partno > 0)
       {
