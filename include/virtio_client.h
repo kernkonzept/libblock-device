@@ -11,6 +11,8 @@
 #include <l4/cxx/unique_ptr_list>
 #include <l4/cxx/utils>
 
+#include <l4/sys/task>
+
 #include <l4/l4virtio/server/virtio-block>
 
 #include <l4/libblock-device/debug.h>
@@ -294,6 +296,10 @@ public:
    */
   void unregister_obj(L4::Registry_iface *registry)
   {
+    // We need to delete the IRQ object created in register_irq_obj() ourselves
+    L4::Cap<L4::Task>(L4Re::This_task)
+      ->unmap(this->irq_iface()->obj_cap().fpage(),
+              L4_FP_ALL_SPACES | L4_FP_DELETE_OBJ);
     registry->unregister_obj(this->irq_iface());
     registry->unregister_obj(this);
   }
