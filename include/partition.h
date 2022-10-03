@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstring>
+#include <string>
 
 #include <l4/cxx/ref_ptr>
 
@@ -26,6 +27,7 @@ namespace Block_device {
 struct Partition_info
 {
   char           guid[37];  ///< ID of the partition.
+  std::u16string name;      ///< UTF16 name of the partition.
   l4_uint64_t    first;     ///< First valid sector.
   l4_uint64_t    last;      ///< Last valid sector.
   l4_uint64_t    flags;     ///< Additional flags, depending on partition type.
@@ -79,6 +81,10 @@ public:
       return -L4_ENODEV;
 
     render_guid(e->partition_guid, inf->guid);
+
+    auto name =
+      std::u16string((char16_t *)e->name, sizeof(e->name) / sizeof(e->name[0]));
+    inf->name = name.substr(0, name.find((char16_t) 0));
 
     inf->first = e->first;
     inf->last = e->last;

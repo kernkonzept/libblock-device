@@ -12,6 +12,10 @@
 #include <l4/libblock-device/device.h>
 #include <l4/libblock-device/partition.h>
 
+#include <string>
+#include <locale>
+#include <codecvt>
+
 namespace Block_device {
 
 namespace Impl {
@@ -93,7 +97,8 @@ public:
 
   Partitioned_device(cxx::Ref_ptr<Device_type> const &dev,
                      unsigned partition_id, Partition_info const &pi)
-  : _parent(dev),
+  : _name(pi.name),
+    _parent(dev),
     _start(pi.first),
     _size(pi.last - pi.first + 1)
   {
@@ -117,6 +122,12 @@ public:
   bool match_hid(cxx::String const &hid) const override
   {
     if (hid == cxx::String(_guid, 36))
+      return true;
+
+    std::u16string whid =
+      std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}
+        .from_bytes(std::string(hid.start(), hid.len()));
+    if (whid == _name)
       return true;
 
     // check for identifier of form: <device_name>:<partition id>
@@ -198,6 +209,7 @@ public:
 
 private:
   char _guid[37];
+  std::u16string  _name;
   char _partition_id[4];
   cxx::Ref_ptr<Device_type> _parent;
   l4_uint64_t _start;
