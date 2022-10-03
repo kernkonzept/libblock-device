@@ -28,7 +28,7 @@ namespace Impl {
    * Mixin implementing discard for partition devices.
    *
    * \tparam PART_DEV  Class of the partition device
-   * \taparm BASE_DEV  Class implementing the Device interface.
+   * \tparam BASE_DEV  Class implementing the Device interface.
    */
   template <typename PART_DEV, typename BASE_DEV>
   class Partitioned_device_discard_mixin<PART_DEV, BASE_DEV, true>
