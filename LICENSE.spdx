@@ -8,7 +8,7 @@ SPDXVersion: SPDX-2.1
 DataLicense: CC0-1.0
 SPDXID: SPDXRef-Document
 DocumentNamespace: spdx:kernkonzept/libblock-device-772921b1-3dbe-4b34-8523-34a0c3e0fa42
-DocumentName: LICENSE.spdx
+DocumentName: libblock-device
 
 Creator: Organization: Kernkonzept GmbH (info@kernkonzept.com)
 
