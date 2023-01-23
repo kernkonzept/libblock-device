@@ -9,7 +9,6 @@
 
 #include <cstring>
 #include <string>
-#include <cassert>
 
 #include <l4/cxx/ref_ptr>
 
@@ -107,14 +106,6 @@ public:
   }
 
 private:
-  void invoke_callback()
-  {
-    assert(_callback);
-    _callback();
-    // Reset the callback to drop potential transitive self-references
-    _callback = nullptr;
-  }
-
   void get_gpt(int error, l4_size_t)
   {
     _header.unmap();
@@ -122,7 +113,7 @@ private:
     if (error < 0)
       {
         // can't read from device, we are done
-        invoke_callback();
+        _callback();
         return;
       }
 
@@ -136,7 +127,7 @@ private:
     if (strncmp(header->signature, "EFI PART", 8) != 0)
       {
         info.printf("No GUID partition header found.\n");
-        invoke_callback();
+        _callback();
         return;
       }
 
@@ -181,7 +172,7 @@ private:
     if (error < 0)
       _num_partitions = 0;
 
-    invoke_callback();
+    _callback();
   }
 
   void read_sectors(l4_uint64_t sector,
@@ -196,10 +187,10 @@ private:
                      int ret = _dev->inout_data(sector, _db, next,
                                                 L4Re::Dma_space::Direction::From_device);
                      if (ret < 0 && ret != -L4_EBUSY)
-                       invoke_callback();
+                       _callback();
                      return ret != -L4_EBUSY;
                    },
-                 [=](bool ret) { if (!ret) invoke_callback(); }
+                 [=](bool ret) { if (!ret) _callback(); }
                 );
   }
 
