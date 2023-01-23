@@ -244,6 +244,9 @@ class Device_mgr
      -> decltype((T::create_partition)(cxx::Ref_ptr<Device_type>(), 0, Partition_info()), void())
     {
       auto reader = cxx::make_ref_obj<Partition_reader<Device_type>>(_device.get());
+      // The reference to reader will be captured in the lambda passed to
+      // reader's own read() method. At the same time, reader will store
+      // the reference to the lambda.
       reader->read(
         [=]()
           {
@@ -261,6 +264,11 @@ class Device_mgr
               }
 
             callback();
+
+            // Prolong the life-span of reader until we are sure the reader is
+            // not currently invoked (i.e. capture the last reference to it in
+            // an independent timeout callback).
+            Errand::schedule([reader](){}, 0);
           });
     }
 
