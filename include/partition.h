@@ -103,6 +103,17 @@ public:
         info.printf("   : Type: %s\n", render_guid(e->type_guid, buf));
       }
 
+    auto warn = Dbg::warn();
+    if (inf->last < inf->first)
+      {
+        warn.printf(
+          "Invalid settings of %3zu. Last lba before first lba. Will ignore.\n",
+          idx);
+        // Errors in the GPT shall not crash any service -- just ignore the
+        // corresponding partition.
+        return -L4_ENODEV;
+      }
+
     return L4_EOK;
   }
 
