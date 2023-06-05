@@ -290,8 +290,24 @@ class Device_mgr
     {
       assert(_interface);
 
-      _interface->unregister_obj(registry);
+      // This operation is idempotent.
       _interface->shutdown_event(Shutdown_type::Client_gone);
+
+      if (_interface->busy())
+        {
+          Dbg::trace().printf("Deferring dead client removal.\n");
+
+          // Cannot remove the client while it still has active I/O requests.
+          // This means that the device did not abort its inflight requests in
+          // its reset() callback. It is still desirable though to wait for
+          // those requests to finish and defer the dead client removal until
+          // later.
+          Errand::schedule([this, registry]() { remove_client(registry); },
+                           10000);
+          return;
+        }
+
+      _interface->unregister_obj(registry);
       _interface.reset();
     }
 

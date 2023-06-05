@@ -113,7 +113,8 @@ public:
                                                      || readonly),
     _numds(numds),
     _device(dev),
-    _pending(dev->request_queue())
+    _pending(dev->request_queue()),
+    _in_flight(0)
   {
     reset_client();
     init_discard_info(0);
@@ -205,6 +206,8 @@ public:
 
   void task_finished(Generic_pending_request *preq, int error, l4_size_t sz)
   {
+    _in_flight--;
+
     // move on to the next request
 
     // Only finalize if the client is still alive
@@ -223,9 +226,12 @@ public:
    */
   void shutdown_event(Shutdown_type type)
   {
-    // Transitions from Client_gone are not allowed as the client must be
-    // destroyed before another shutdown event handling
-    l4_assert(_shutdown_state != Client_gone);
+    // If the client is already in the Client_gone state, it means that it was
+    // already shutdown and this is another go at its removal. This situation
+    // can occur because at the time of its previous removal attempt there were
+    // still I/O requests in progress.
+    if (_shutdown_state == Client_gone)
+      return;
 
     // Transitions from System_shutdown are also not allowed, the initiator
     // should take care of graceful handling of this.
@@ -302,6 +308,11 @@ public:
               L4_FP_ALL_SPACES | L4_FP_DELETE_OBJ);
     registry->unregister_obj(this->irq_iface());
     registry->unregister_obj(this);
+  }
+
+  bool busy() const
+  {
+    return _in_flight != 0;
   }
 
 protected:
@@ -634,9 +645,12 @@ private:
     else if (error < 0)
       handle_request_error(error, pending.get());
     else
-      // request has been successfully sent to hardware
-      // which now has ownership of Request pointer, so release here
-      pending.release();
+      {
+        // request has been successfully sent to hardware
+        // which now has ownership of Request pointer, so release here
+        pending.release();
+        _in_flight++;
+      }
 
     return true;
   }
@@ -667,6 +681,8 @@ protected:
   Device_discard_feature::Discard_info _di;
 
   L4virtio::Svr::Block_features _negotiated_features;
+
+  unsigned _in_flight;
 };
 
 } //name space
