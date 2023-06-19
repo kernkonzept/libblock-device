@@ -429,6 +429,8 @@ private:
 
   void maintain_cache_before_req(Pending_inout_request const *preq)
   {
+    if (preq->dir() == L4Re::Dma_space::None)
+      return;
     for (Inout_block const *cur = &preq->blocks; cur; cur = cur->next.get())
       {
         l4_addr_t vstart = (l4_addr_t)cur->virt_addr;
@@ -447,6 +449,8 @@ private:
 
   void maintain_cache_after_req(Pending_inout_request const *preq)
   {
+    if (preq->dir() == L4Re::Dma_space::None)
+      return;
     for (Inout_block const *cur = &preq->blocks; cur; cur = cur->next.get())
       {
         l4_addr_t vstart = (l4_addr_t)cur->virt_addr;
