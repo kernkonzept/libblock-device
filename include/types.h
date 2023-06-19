@@ -43,6 +43,7 @@ enum Shutdown_type
  */
 struct Dma_region_info
 {
+  virtual ~Dma_region_info() = default;
 };
 
 /**
