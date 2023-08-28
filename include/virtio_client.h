@@ -469,13 +469,20 @@ private:
     l4_uint64_t sector = req->header().sector / (_device->sector_size() >> 9);
 
     maintain_cache_before_req(preq);
-    return _device->inout_data(sector, preq->blocks,
-                               [this, preq](int error, l4_size_t sz) {
-                                 release_dma(preq);
-                                 maintain_cache_after_req(preq);
-                                 task_finished(preq, error, sz);
-                               },
-                               preq->dir());
+    int res = _device->inout_data(
+      sector, preq->blocks,
+      [this, preq](int error, l4_size_t sz) {
+        release_dma(preq);
+        maintain_cache_after_req(preq);
+        task_finished(preq, error, sz);
+      },
+      preq->dir());
+
+    // request successfully submitted to device
+    if (res >= 0)
+      _in_flight++;
+
+    return res;
   }
 
   int check_flush_request(Pending_flush_request *preq)
@@ -494,9 +501,15 @@ private:
 
   int flush_request(Pending_flush_request *preq)
   {
-    return _device->flush([this, preq](int error, l4_size_t sz) {
+    int res = _device->flush([this, preq](int error, l4_size_t sz) {
       task_finished(preq, error, sz);
     });
+
+    // request successfully submitted to device
+    if (res >= 0)
+      _in_flight++;
+
+    return res;
   }
 
   bool check_features(void) override
@@ -666,11 +679,16 @@ private:
     auto *req = preq->request.get();
     bool discard = (req->header().type == L4VIRTIO_BLOCK_T_DISCARD);
 
-    return _device->discard(0, preq->blocks,
-                [this, preq](int error, l4_size_t sz) {
-                  task_finished(preq, error, sz);
-                },
-                discard);
+    int res = _device->discard(
+      0, preq->blocks,
+      [this, preq](int error, l4_size_t sz) { task_finished(preq, error, sz); },
+      discard);
+
+    // request successfully submitted to device
+    if (res >= 0)
+      _in_flight++;
+
+    return res;
   }
 
   template <typename REQ>
@@ -688,7 +706,6 @@ private:
         // request has been successfully sent to hardware
         // which now has ownership of Request pointer, so release here
         pending.release();
-        _in_flight++;
       }
 
     return true;
