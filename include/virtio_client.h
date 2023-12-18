@@ -381,6 +381,7 @@ private:
           }
         catch (L4virtio::Svr::Bad_descriptor const &e)
           {
+            Dbg::warn().printf("Descriptor error: %s\n", e.message());
             return -L4_EIO;
           }
 
@@ -594,6 +595,7 @@ private:
           }
         catch (L4virtio::Svr::Bad_descriptor const &e)
           {
+            Dbg::warn().printf("Descriptor error: %s\n", e.message());
             return -L4_EIO;
           }
 
