@@ -26,6 +26,7 @@
 #include <l4/libblock-device/partition.h>
 #include <l4/libblock-device/part_device.h>
 #include <l4/libblock-device/virtio_client.h>
+#include <l4/libblock-device/scheduler.h>
 
 namespace Block_device {
 
@@ -67,17 +68,21 @@ struct Partitionable_factory
 /**
  * Basic class that scans devices and handles client connections.
  *
- * \tparam DEV      Base class for all devices.
- * \tparam FACTORY  Class that creates clients and partitions. See
- *                  Simple_factory for an example of the required interface.
+ * \tparam DEV        Base class for all devices.
+ * \tparam FACTORY    Class that creates clients and partitions. See
+ *                    Simple_factory for an example of the required interface.
+ * \tparam SCHEDULER  Class that schedules VIRTIO block requests from all
+ *                    clients.
  *
  */
-template <typename DEV, typename FACTORY = Simple_factory<DEV>>
+template <typename DEV, typename FACTORY = Simple_factory<DEV>,
+          typename SCHEDULER = Rr_scheduler<typename FACTORY::Device_type>>
 class Device_mgr
 {
   using Device_factory_type = FACTORY;
   using Client_type = typename Device_factory_type::Client_type;
   using Device_type = typename Device_factory_type::Device_type;
+  using Scheduler_type = SCHEDULER;
 
   using Ds_vector = std::vector<L4::Cap<L4Re::Dataspace>>;
 
@@ -119,9 +124,10 @@ class Device_mgr
   class Connection : public cxx::Ref_obj_list_item<Connection>
   {
   public:
-    explicit Connection(cxx::Ref_ptr<Device_type> &&dev)
+    explicit Connection(Device_mgr *mgr, cxx::Ref_ptr<Device_type> &&dev)
     : _shutdown_state(Shutdown_type::Running),
-      _device(cxx::move(dev))
+      _device(cxx::move(dev)),
+      _mgr(mgr)
     {}
 
     L4::Cap<void> cap() const
@@ -193,6 +199,7 @@ class Device_mgr
             return -L4_ENOMEM;
         }
 
+      _mgr->_scheduler->add_client(clt.get());
       _interface.reset(clt.release());
 
       // Let it be known that the client and the device paired
@@ -259,6 +266,7 @@ class Device_mgr
                   continue;
 
                 auto conn = cxx::make_ref_obj<Connection>(
+                  _mgr,
                   Device_factory_type::create_partition(_device, i, info));
                 _subs.push_front(std::move(conn));
               }
@@ -308,6 +316,7 @@ class Device_mgr
         }
 
       _interface->unregister_obj(registry);
+      _mgr->_scheduler->remove_client(_interface.get());
       _interface.reset();
     }
 
@@ -326,6 +335,7 @@ class Device_mgr
     bool match_hid(std::string const &name) const
     { return _device->match_hid(cxx::String(name.c_str(), name.length())); }
 
+
     /// Current shutdown state
     Shutdown_type _shutdown_state;
     /// The device itself.
@@ -334,12 +344,16 @@ class Device_mgr
     cxx::unique_ptr<Client_type> _interface;
     /// Partitions of the device.
     cxx::Ref_ptr_list<Connection> _subs;
+
+    Device_mgr *_mgr;
   };
 
 public:
   Device_mgr(L4::Registry_iface *registry)
   : _registry(registry)
-  {}
+  {
+    _scheduler = cxx::make_unique<Scheduler_type>(registry);
+  }
 
   virtual ~Device_mgr()
   {
@@ -437,7 +451,7 @@ public:
 
   void add_disk(cxx::Ref_ptr<Device_type> &&device, Errand::Callback const &callback)
   {
-    auto conn = cxx::make_ref_obj<Connection>(std::move(device));
+    auto conn = cxx::make_ref_obj<Connection>(this, std::move(device));
 
     conn->start_disk_scan(
       [=]()
@@ -489,6 +503,8 @@ private:
   cxx::Ref_ptr_list<Connection> _connpts;
   /// List of clients waiting for a device to appear.
   std::vector<Pending_client> _pending_clients;
+  /// I/O scheduler
+  cxx::unique_ptr<Scheduler_type> _scheduler;
 };
 
 } // name space

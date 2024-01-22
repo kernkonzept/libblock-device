@@ -14,7 +14,6 @@
 
 #include <l4/libblock-device/errand.h>
 #include <l4/libblock-device/types.h>
-#include <l4/libblock-device/request_queue.h>
 
 namespace Block_device {
 
@@ -34,16 +33,6 @@ struct Device : public cxx::Ref_obj
   virtual l4_size_t max_size() const = 0;
   /// Returns the number of segments allowed for scatter-gather-operations.
   virtual unsigned max_segments() const = 0;
-
-  /**
-   * Return the device-global device queue.
-   *
-   * Queues must be allocated such that all clients that require a shared
-   * pool of resources to complete their requests, also use the same request
-   * queue. In particular, if two devices access common resources, then they
-   * must provide the same queue.
-   */
-  virtual Request_queue *request_queue() = 0;
 
   /// Resets the device into a good known state.
   virtual void reset() = 0;
@@ -93,17 +82,6 @@ struct Device : public cxx::Ref_obj
 };
 
 inline Device::~Device() = default;
-
-template <typename DEV>
-class Device_with_request_queue : public DEV
-{
-public:
-  Request_queue *request_queue() override
-  { return &_request_queue; }
-
-private:
-  Simple_request_queue _request_queue;
-};
 
 /**
  * Partial interface for devices that offer discard functionality.

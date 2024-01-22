@@ -152,9 +152,6 @@ public:
   unsigned max_segments() const override
   { return _parent->max_segments(); }
 
-  Request_queue *request_queue() override
-  { return _parent->request_queue(); }
-
   void reset() override
   {}
 

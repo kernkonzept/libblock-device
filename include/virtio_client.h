@@ -19,15 +19,14 @@
 #include <l4/libblock-device/debug.h>
 #include <l4/libblock-device/device.h>
 #include <l4/libblock-device/types.h>
-#include <l4/libblock-device/request_queue.h>
+#include <l4/libblock-device/request.h>
 
 namespace Block_device {
 
 template <typename DEV>
 class Virtio_client
 : public L4virtio::Svr::Block_dev_base<Mem_region_info>,
-  public L4::Epiface_t<Virtio_client<DEV>, L4virtio::Device>,
-  public Pending_request::Owner
+  public L4::Epiface_t<Virtio_client<DEV>, L4virtio::Device>
 {
 protected:
   class Generic_pending_request : public Pending_request
@@ -50,9 +49,6 @@ protected:
     {
       client->finalize_request(cxx::move(request), 0, L4VIRTIO_BLOCK_S_IOERR);
     }
-
-    bool is_owner(Pending_request::Owner *owner) override
-    { return static_cast<Pending_request::Owner *>(client) == owner; }
 
     cxx::unique_ptr<Request> request;
     Virtio_client *client;
@@ -117,9 +113,10 @@ public:
                                                    dev->capacity() >> 9,
                                                    dev->is_read_only()
                                                      || readonly),
+    _client_invalidate_cb(nullptr),
+    _client_idle_cb(nullptr),
     _numds(numds),
     _device(dev),
-    _pending(dev->request_queue()),
     _in_flight(0)
   {
     reset_client();
@@ -131,8 +128,8 @@ public:
    */
   void reset_device() override
   {
-    if (_pending)
-      _pending->drain_queue_for(this, false);
+    if (_client_invalidate_cb)
+      _client_invalidate_cb(false);
     _device->reset();
     _negotiated_features.raw = 0;
   }
@@ -152,17 +149,50 @@ public:
   }
 
   bool queue_stopped() override
-  { return false; }
+  { return _shutdown_state == Shutdown_type::Client_gone; }
 
-  bool process_request(cxx::unique_ptr<Request> &&req) override
+  // make these interfaces public so that a request scheduler can invoke them
+  using L4virtio::Svr::Block_dev_base<Mem_region_info>::check_for_new_requests;
+  using L4virtio::Svr::Block_dev_base<Mem_region_info>::get_request;
+
+  // make it possible for the request scheduler to register a direct callback
+  void set_client_invalidate_cb(std::function<void(bool)> &&cb)
+  {
+    _client_invalidate_cb = cb;
+  }
+
+  void set_client_idle_cb(std::function<void()> &&cb)
+  {
+    _client_idle_cb = cb;
+  }
+
+  // make it possible for the request scheduler to register a device notify IRQ
+  void set_device_notify_irq(L4::Cap<L4::Irq> irq)
+  {
+    _device_notify_irq = irq;
+  }
+
+  L4::Cap<L4::Irq> device_notify_irq() const override
+  {
+    return _device_notify_irq;
+  }
+
+  /**
+   * Start processing the request by either immediately failing it (due to an
+   * error or the shutdown state) or creating a pending request out of it after
+   * running sanity checks on it.
+   */
+  cxx::unique_ptr<Pending_request> start_request(cxx::unique_ptr<Request> &&req)
   {
     auto trace = Dbg::trace("virtio");
+
+    cxx::unique_ptr<Pending_request> pending;
 
     if (_shutdown_state != Shutdown_type::Running)
       {
         trace.printf("Failing requests as the client is shutting down\n");
         this->finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_IOERR);
-        return false;
+        return pending;
       }
 
     trace.printf("request received: type 0x%x, sector 0x%llx\n",
@@ -172,41 +202,41 @@ public:
       case L4VIRTIO_BLOCK_T_OUT:
       case L4VIRTIO_BLOCK_T_IN:
         {
-          auto pending = cxx::make_unique<Pending_inout_request>(this, cxx::move(req));
-          int ret = build_inout_blocks(pending.get());
-          if (ret >= 0)
-            {
-              if (_pending && !_pending->empty())
-                ret = -L4_EBUSY; // make sure to keep request order
-              else
-                ret = inout_request(pending.get());
-            }
-          return handle_request_result(ret, cxx::move(pending));
+          auto p = cxx::make_unique<Pending_inout_request>(this, cxx::move(req));
+          int ret = build_inout_blocks(p.get());
+          if (ret == L4_EOK)
+            pending.reset(p.release());
+          else
+            handle_request_error(ret, p.get());
+          break;
         }
       case L4VIRTIO_BLOCK_T_FLUSH:
         {
-          auto pending = cxx::make_unique<Pending_flush_request>(this, cxx::move(req));
-          int ret = check_flush_request(pending.get());
+          auto p = cxx::make_unique<Pending_flush_request>(this, cxx::move(req));
+          int ret = check_flush_request(p.get());
           if (ret == L4_EOK)
-            {
-              if (_pending && !_pending->empty())
-                ret = -L4_EBUSY; // make sure to keep request order
-              else
-                ret = flush_request(pending.get());
-            }
-          return handle_request_result(ret, cxx::move(pending));
+            pending.reset(p.release());
+          else
+            handle_request_error(ret, p.get());
+          break;
         }
       case L4VIRTIO_BLOCK_T_WRITE_ZEROES:
       case L4VIRTIO_BLOCK_T_DISCARD:
         {
-          auto pending = cxx::make_unique<Pending_cmd_request>(this, cxx::move(req));
-          return handle_discard(cxx::move(pending), 0);
+          auto p = cxx::make_unique<Pending_cmd_request>(this, cxx::move(req));
+          int ret = build_discard_cmd_blocks(p.get());
+          if (ret == L4_EOK)
+            pending.reset(p.release());
+          else
+            handle_request_error(ret, p.get());
+          break;
         }
       default:
         finalize_request(cxx::move(req), 0, L4VIRTIO_BLOCK_S_UNSUPP);
+        break;
       }
 
-    return true;
+    return pending;
   }
 
   void task_finished(Generic_pending_request *preq, int error, l4_size_t sz)
@@ -219,8 +249,9 @@ public:
     if (_shutdown_state != Client_gone)
       finalize_request(cxx::move(preq->request), sz, error);
 
-    if (_pending)
-      _pending->process_pending();
+    // New requests might be schedulable
+    if (_client_idle_cb)
+      _client_idle_cb();
 
     // pending request can be dropped
     cxx::unique_ptr<Pending_request> ureq(preq);
@@ -259,8 +290,8 @@ public:
 
     if (type != Shutdown_type::Running)
       {
-        if (_pending)
-          _pending->drain_queue_for(this, type != Client_gone);
+        if (_client_invalidate_cb)
+          _client_invalidate_cb(type != Shutdown_type::Client_gone);
         _device->reset();
       }
   }
@@ -272,8 +303,7 @@ public:
    *                 requests.
    * \param service  Name of an existing capability the device should use.
    *
-   * This functions registers the general virtio interface as well as the
-   * interrupt handler which is used for receiving client notifications.
+   * This functions registers the general virtio interface.
    *
    * The caller is responsible to call `unregister_obj()` before destroying
    * the client object.
@@ -281,7 +311,6 @@ public:
   L4::Cap<void> register_obj(L4::Registry_iface *registry,
                              char const *service = 0)
   {
-    L4Re::chkcap(registry->register_irq_obj(this->irq_iface()));
     L4::Cap<void> ret;
     if (service)
       ret = registry->register_obj(this, service);
@@ -295,8 +324,6 @@ public:
   L4::Cap<void> register_obj(L4::Registry_iface *registry,
                              L4::Cap<L4::Rcv_endpoint> ep)
   {
-    L4Re::chkcap(registry->register_irq_obj(this->irq_iface()));
-
     return L4Re::chkcap(registry->register_obj(this, ep));
   }
 
@@ -307,11 +334,6 @@ public:
    */
   void unregister_obj(L4::Registry_iface *registry)
   {
-    // We need to delete the IRQ object created in register_irq_obj() ourselves
-    L4::Cap<L4::Task>(L4Re::This_task)
-      ->unmap(this->irq_iface()->obj_cap().fpage(),
-              L4_FP_ALL_SPACES | L4_FP_DELETE_OBJ);
-    registry->unregister_obj(this->irq_iface());
     registry->unregister_obj(this);
   }
 
@@ -541,20 +563,6 @@ private:
                           _di.max_write_zeroes_seg, _di.write_zeroes_may_unmap);
   }
 
-  bool handle_discard(cxx::unique_ptr<Pending_cmd_request> &&pending, int)
-  {
-    int ret = build_discard_cmd_blocks(pending.get());
-    if (ret >= 0)
-      {
-        if (this->_pending && !this->_pending->empty())
-          ret = -L4_EBUSY; // make sure to keep request order
-        else
-          ret = discard_cmd_request(pending.get(), 0);
-      }
-
-    return this->handle_request_result(ret, cxx::move(pending));
-  }
-
   int build_discard_cmd_blocks(Pending_cmd_request *preq)
   {
     auto *req = preq->request.get();
@@ -694,26 +702,6 @@ private:
     return res;
   }
 
-  template <typename REQ>
-  bool handle_request_result(int error, cxx::unique_ptr<REQ> &&pending)
-  {
-    if (error == -L4_EBUSY && _pending)
-      {
-        Dbg::trace("virtio").printf("Port busy, queueing request.\n");
-        _pending->add_to_queue(cxx::unique_ptr<Pending_request>(pending.release()));
-      }
-    else if (error < 0)
-      handle_request_error(error, pending.get());
-    else
-      {
-        // request has been successfully sent to hardware
-        // which now has ownership of Request pointer, so release here
-        pending.release();
-      }
-
-    return true;
-  }
-
   // only use on errors that are not busy
   void handle_request_error(int error, Generic_pending_request *pending)
   {
@@ -733,10 +721,12 @@ private:
   }
 
 protected:
+  L4::Cap<L4::Irq> _device_notify_irq;
+  std::function<void(bool)> _client_invalidate_cb;
+  std::function<void()> _client_idle_cb;
   unsigned _numds;
   Shutdown_type _shutdown_state;
   cxx::Ref_ptr<Device_type> _device;
-  Request_queue *_pending;
   Device_discard_feature::Discard_info _di;
 
   L4virtio::Svr::Block_features _negotiated_features;
