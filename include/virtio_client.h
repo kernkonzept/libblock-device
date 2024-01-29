@@ -61,19 +61,24 @@ protected:
   struct Pending_inout_request : public Generic_pending_request
   {
     Inout_block blocks;
+    L4Re::Dma_space::Direction dir;
 
-    using Generic_pending_request::Generic_pending_request;
-
-    L4Re::Dma_space::Direction dir() const
+    explicit Pending_inout_request(Virtio_client *c,
+                                   cxx::unique_ptr<Request> &&req)
+    : Generic_pending_request(c, cxx::move(req))
     {
-      return this->request->header().type == L4VIRTIO_BLOCK_T_OUT
-             ? L4Re::Dma_space::Direction::To_device
-             : L4Re::Dma_space::Direction::From_device;
+      dir = this->request->header().type == L4VIRTIO_BLOCK_T_OUT
+              ? L4Re::Dma_space::Direction::To_device
+              : L4Re::Dma_space::Direction::From_device;
+    }
+
+    ~Pending_inout_request() override
+    {
+      this->client->release_dma(this);
     }
 
     int handle_request() override
     { return this->check_error(this->client->inout_request(this)); }
-
   };
 
   struct Pending_flush_request : public Generic_pending_request
@@ -175,8 +180,7 @@ public:
                 ret = -L4_EBUSY; // make sure to keep request order
               else
                 ret = inout_request(pending.get());
-            } else
-              release_dma(pending.get());
+            }
           return handle_request_result(ret, cxx::move(pending));
         }
       case L4VIRTIO_BLOCK_T_FLUSH:
@@ -330,7 +334,7 @@ private:
     while (cur)
       {
         if (cur->num_sectors)
-          _device->dma_unmap(cur->dma_addr, cur->num_sectors, req->dir());
+          _device->dma_unmap(cur->dma_addr, cur->num_sectors, req->dir);
         cur = cur->next.get();
       }
   }
@@ -341,7 +345,7 @@ private:
     l4_size_t sps = _device->sector_size() >> 9;
     l4_uint64_t current_sector = req->header().sector / sps;
     l4_uint64_t sectors = _device->capacity() / _device->sector_size();
-    auto dir = preq->dir();
+    auto dir = preq->dir;
 
     l4_uint32_t flags = 0;
     if (req->header().type == L4VIRTIO_BLOCK_T_OUT)
@@ -430,7 +434,7 @@ private:
 
   void maintain_cache_before_req(Pending_inout_request const *preq)
   {
-    if (preq->dir() == L4Re::Dma_space::None)
+    if (preq->dir == L4Re::Dma_space::None)
       return;
     for (Inout_block const *cur = &preq->blocks; cur; cur = cur->next.get())
       {
@@ -438,9 +442,9 @@ private:
         if (vstart)
           {
             l4_size_t vsize = cur->num_sectors * _device->sector_size();
-            if (preq->dir() == L4Re::Dma_space::From_device)
+            if (preq->dir == L4Re::Dma_space::From_device)
               l4_cache_inv_data(vstart, vstart + vsize);
-            else if (preq->dir() == L4Re::Dma_space::To_device)
+            else if (preq->dir == L4Re::Dma_space::To_device)
               l4_cache_clean_data(vstart, vstart + vsize);
             else // L4Re::Dma_space::Bidirectional
               l4_cache_flush_data(vstart, vstart + vsize);
@@ -450,7 +454,7 @@ private:
 
   void maintain_cache_after_req(Pending_inout_request const *preq)
   {
-    if (preq->dir() == L4Re::Dma_space::None)
+    if (preq->dir == L4Re::Dma_space::None)
       return;
     for (Inout_block const *cur = &preq->blocks; cur; cur = cur->next.get())
       {
@@ -458,7 +462,7 @@ private:
         if (vstart)
           {
             l4_size_t vsize = cur->num_sectors * _device->sector_size();
-            if (preq->dir() != L4Re::Dma_space::To_device)
+            if (preq->dir != L4Re::Dma_space::To_device)
               l4_cache_inv_data(vstart, vstart + vsize);
           }
       }
@@ -473,11 +477,10 @@ private:
     int res = _device->inout_data(
       sector, preq->blocks,
       [this, preq](int error, l4_size_t sz) {
-        release_dma(preq);
         maintain_cache_after_req(preq);
         task_finished(preq, error, sz);
       },
-      preq->dir());
+      preq->dir);
 
     // request successfully submitted to device
     if (res >= 0)
