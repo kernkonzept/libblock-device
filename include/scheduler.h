@@ -61,6 +61,9 @@ private:
 
     Context(Client_type *client) : client(client), device_busy(false), cost(0)
     {}
+
+    bool same_notification_domain(Client_type const *c) const
+    { return c->notification_domain() == client->notification_domain(); }
   };
 
   using Queue_type = std::vector<cxx::unique_ptr<Context>>;
@@ -146,11 +149,11 @@ private:
   }
 
   /** Act upon client's device becoming not busy. */
-  void client_idle(Client_type *)
+  void client_idle(Client_type *client)
   {
     bool resched = false;
     for (auto &c : _clients)
-      if (c->device_busy)
+      if (c->device_busy && c->same_notification_domain(client))
         {
           c->device_busy = false;
           resched = true;

@@ -342,6 +342,9 @@ public:
     return _in_flight != 0;
   }
 
+  Notification_domain const *notification_domain() const
+  { return _device->notification_domain(); }
+
 protected:
   L4::Ipc_svr::Server_iface *server_iface() const override
   {

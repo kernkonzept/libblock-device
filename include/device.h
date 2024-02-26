@@ -17,9 +17,29 @@
 
 namespace Block_device {
 
+/**
+ * Opaque type for representing a notification domain
+ *
+ * Notification domains must be assigned to devices such that all devices that
+ * require a shared pool of resources to process their requests, also find
+ * themselves in the same notification domain. In particular, if two devices
+ * access common resources, then they must be in the same domain. An example
+ * of this are two partitions sharing the same parent device because processing
+ * of requests for one partition might depend on completion of request
+ * processing in another partition. On the other hand, independent disk devices
+ * will typically not share the same notification domain because their requests
+ * are completely independent of each other.
+ */
+struct Notification_domain
+{
+};
+
 struct Device : public cxx::Ref_obj
 {
   virtual ~Device() = 0;
+
+  /// Returns the device notification domain.
+  virtual Notification_domain const *notification_domain() const = 0;
 
   /// Returns if this is a read-only device.
   virtual bool is_read_only() const = 0;
@@ -82,6 +102,17 @@ struct Device : public cxx::Ref_obj
 };
 
 inline Device::~Device() = default;
+
+/**
+ * Device with a per-device notification domain.
+ */
+template <typename DEV>
+struct Device_with_notification_domain : DEV
+{
+  Notification_domain dom;
+  Notification_domain const *notification_domain() const override
+  { return &dom; }
+};
 
 /**
  * Partial interface for devices that offer discard functionality.

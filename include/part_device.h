@@ -116,6 +116,9 @@ public:
     memcpy(_guid, pi.guid, sizeof(_guid));
   }
 
+  Notification_domain const *notification_domain() const override
+  { return _parent->notification_domain(); }
+
   bool is_read_only() const override
   { return _parent->is_read_only(); }
 
