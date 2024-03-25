@@ -184,7 +184,7 @@ private:
 
     if (c->cost + cost > get_weight(c->client))
       {
-        Dbg::trace().printf("Preempting client %p (cost=%lu+%lu, weight=%lu)\n",
+        Dbg::trace().printf("Preempting client %p (cost=%zu+%zu, weight=%zu)\n",
                             c->client, c->cost, cost, get_weight(c->client));
 
         // Charge client's entire weight to force schedule() to give another
