@@ -173,13 +173,26 @@ private:
    * Handle one pending request.
    *
    * \retval  True if the pending request was successfully sent to the device
-   *          or failed immediately.
+   *          or failed immediately or the accumulated client's request cost
+   *          would exceed the client's weight.
    * \retval  False if the pending request could not be handled and remains
    *          pending.
    */
   bool handle_pending(Context *c)
   {
     auto cost = get_cost(*(c->pending));
+
+    if (c->cost + cost > get_weight(c->client))
+      {
+        Dbg::trace().printf("Preempting client %p (cost=%lu+%lu, weight=%lu)\n",
+                            c->client, c->cost, cost, get_weight(c->client));
+
+        // Charge client's entire weight to force schedule() to give another
+        // client a chance.
+        c->cost = get_weight(c->client);
+        return true;
+      }
+
     // Keep the pending request in its place while handling the request.
     // This helps to make sure that the scheduler will not try to schedule
     // new requests while handling the pending one.
