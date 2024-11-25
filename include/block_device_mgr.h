@@ -360,6 +360,62 @@ public:
       c->unregister_interfaces(_registry);
   }
 
+  /**
+   * Parse and verify a device string parameter.
+   *
+   * \param[in]  param   Device string name parameter.
+   * \param[out] device  Device name extracted from parameter.
+   * \returns L4 error code.
+   *
+   * This function tests if 'param' contains one of the following variants of a
+   * device name and extracts it into 'device':
+   *  - "partlabel:<label>":
+   *    'device' contains "<label>" without conversion.
+   *  - "partuuid:<uuid>":
+   *    Check if "<uuid>" is a valid UUID and return with error if not. In case
+   *    of success, 'device' contains "<uuid>" with all characters converted to
+   *    upper case.
+   *  - "<string>":
+   *    Check if "<string>" is a valid UUID. If so, 'device' contains "<string>"
+   *    with all characters converted to upper case. Otherwise, 'device'
+   *    contains the unmodified "<string>".
+   */
+  static int parse_device_name(std::string const &param, std::string &device)
+  {
+    std::string const partlabel("partlabel:");
+    std::string const partuuid("partuuid:");
+
+    if (param.size() > partlabel.size()
+        && param.compare(0, partlabel.size(), partlabel) == 0)
+      {
+        device = param.substr(partlabel.size());
+        return L4_EOK;
+      }
+    else if (param.size() > partuuid.size()
+             && param.compare(0, partuuid.size(), partuuid) == 0)
+      {
+        auto device_partuuid = param.substr(partuuid.size());
+        if (!is_uuid(device_partuuid.c_str()))
+          {
+            Dbg::trace().printf("The 'partuuid:' parameter expects a UUID.\n");
+            return -L4_EINVAL;
+          }
+
+        device = device_partuuid;
+        std::transform(device.begin(), device.end(), device.begin(),
+                       [](unsigned char c){ return std::toupper(c); });
+        return L4_EOK;
+      }
+    else
+      {
+        device = param;
+        if (is_uuid(param.c_str()))
+          std::transform(device.begin(), device.end(), device.begin(),
+                         [](unsigned char c) { return std::toupper(c); });
+        return L4_EOK;
+      }
+  }
+
   int add_static_client(L4::Cap<L4::Rcv_endpoint> client, const char *device,
                         int partno, int num_ds, bool readonly = false,
                         Pairing_callback cb = nullptr,
@@ -495,6 +551,21 @@ private:
       }
   }
 
+  static constexpr bool is_uuid(char const *s)
+  {
+    for (unsigned i = 0; i < 36; ++i)
+      if (i == 8 || i == 13 || i == 18 || i == 23)
+        {
+          if (s[i] != '-')
+            return false;
+        }
+      else
+        {
+          if (!isxdigit(s[i]))
+            return false;
+        }
+    return s[36] == '\0';
+  }
 
   /// Registry new client connections subscribe to.
   L4::Registry_iface *_registry;
