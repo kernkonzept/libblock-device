@@ -126,9 +126,12 @@ public:
     if (hid == cxx::String(_guid, 36))
       return true;
 
+    _Pragma("GCC diagnostic push");
+    _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"");
     std::u16string whid =
       std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}
         .from_bytes(std::string(hid.start(), hid.len()));
+    _Pragma("GCC diagnostic pop");
     if (whid == _name)
       return true;
 
