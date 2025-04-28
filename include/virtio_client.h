@@ -445,7 +445,7 @@ private:
           return ret;
 
         blk->dma_addr = phys;
-        blk->virt_addr = (void *) ((l4_addr_t)b.mem->local_base() + off);
+        blk->virt_addr = b.addr;
         blk->num_sectors = sz;
         current_sector += sz;
         blk->flags = flags;
